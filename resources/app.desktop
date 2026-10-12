@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=Cosmic Applet Active Window
+Comment=Shows the active window text
+Type=Application
+Icon=com.github.sammyfischer.ActiveWindowApplet
+Exec=cosmic-applet-active-window %F
+Terminal=false
+StartupNotify=true
+Categories=COSMIC
+Keywords=COSMIC
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto
+MimeType=

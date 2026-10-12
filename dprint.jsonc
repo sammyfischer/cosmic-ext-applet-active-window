@@ -1,0 +1,121 @@
+{
+  // general options
+  "lineWidth": 80,
+  "indentWidth": 2,
+  "useTabs": false,
+  "newLineKind": "lf",
+
+  // https://dprint.dev/plugins/typescript/config/
+  "typescript": {
+    "semiColons": "always",
+    "quoteStyle": "preferDouble",
+    "bracePosition": "sameLine",
+    "singleBodyPosition": "sameLine",
+    "nextControlFlowPosition": "nextLine",
+    "doWhileStatement.nextControlFlowPosition": "sameLine",
+    "arrowFunction.useParentheses": "force",
+    "exportDeclaration.sortTypeOnlyExports": "first",
+    "importDeclaration.sortTypeOnlyImports": "first",
+    "exportDeclaration.forceMultiLine": "whenMultiple",
+    "importDeclaration.forceMultiLine": "whenMultiple",
+  },
+
+  // https://dprint.dev/plugins/json/config/
+  "json": {
+    // some files are treated as jsonc despite using json file extension. list them here
+    "jsonTrailingCommaFiles": [
+      "tsconfig.json",
+      ".vscode/extensions.json",
+      ".vscode/settings.json",
+    ],
+  },
+
+  // https://dprint.dev/plugins/markdown/config/
+  "markdown": {
+    "emphasisKind": "asterisks",
+  },
+
+  // https://dprint.dev/plugins/toml/config/
+  "toml": {},
+
+  // https://malva.netlify.app/
+  "malva": {
+    "ignoreCommentDirective": "dprint-ignore",
+    "ignoreFileCommentDirective": "dprint-ignore-file",
+    "operatorLinebreak": "before",
+    "trailingComma": true,
+    "formatComments": true,
+  },
+
+  // https://markup-fmt.netlify.app/
+  "markup": {
+    "ignoreCommentDirective": "dprint-ignore",
+    "ignoreFileCommentDirective": "dprint-ignore-file",
+    "formatComments": true,
+    "maxAttrsPerLine": 1,
+    "component.selfClosing": true,
+    "doctypeKeywordCase": "lower",
+
+    // vue
+    "vBindStyle": "short",
+    "vOnStyle": "short",
+    "vSlotStyle": "vSlot",
+    "vBindSameNameShortHand": false,
+    "vueComponentCase": "pascalCase",
+
+    // svelte
+    "svelteAttrShorthand": false,
+    "svelteDirectiveShorthand": false,
+
+    // other
+    "astroAttrShorthand": false,
+    "angularNextControlFlowSameLine": false,
+  },
+
+  // https://pretty-yaml.netlify.app/
+  "yaml": {
+    "ignoreCommentDirective": "dprint-ignore",
+    "formatComments": true,
+  },
+
+  // external formatters
+  "exec": {
+    "cwd": "${configDir}",
+    "commands": [
+      // rust
+      {
+        "command": "rustfmt +nightly",
+        "exts": ["rs"],
+        "cacheKeyFiles": [
+          "rustfmt.toml",
+          "rust-toolchain.toml",
+        ],
+      },
+    ],
+  },
+
+  "excludes": [
+    "**/*-lock.json",
+    "**/*-lock.yaml",
+    "**/Cargo.lock",
+    "**/node_modules",
+    "**/target",
+    "**/dist/*",
+    "**/build/*",
+    "logs/*",
+    "**/.svelte-kit",
+    "**/*.txt",
+    "resources/*",
+  ],
+
+  "plugins": [
+    "https://plugins.dprint.dev/typescript-0.95.13.wasm",
+    "https://plugins.dprint.dev/json-0.21.0.wasm",
+    "https://plugins.dprint.dev/markdown-0.20.0.wasm",
+    "https://plugins.dprint.dev/toml-0.7.0.wasm",
+    "https://plugins.dprint.dev/g-plane/markup_fmt-v0.25.3.wasm",
+    "https://plugins.dprint.dev/g-plane/pretty_yaml-v0.5.1.wasm",
+    "https://plugins.dprint.dev/g-plane/malva-v0.15.1.wasm",
+    "https://plugins.dprint.dev/exec-0.6.2.json@df98f54ffd3092b8a841aedd6d098a2651f16d0a796a40535774f1a8b4b9d463",
+  ],
+}
