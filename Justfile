@@ -44,11 +44,15 @@ fmt:
   dprint fmt --diff
 
 # Runs a clippy check
-check *args:
+lint *args:
   cargo clippy --all-features {{ args }} -- -W clippy::pedantic
 
+alias ck := check
+# Checks for compliance (formats and lints)
+check: fmt lint
+
 # Runs a clippy check with JSON message format
-check-json: (check '--message-format=json')
+check-json: (lint '--message-format=json')
 
 # Run the application for testing purposes
 run *args:
@@ -56,10 +60,14 @@ run *args:
 
 # Installs files
 install:
-  install -Dm0755 {{ cargo-target-dir / 'release' / name }} {{ bin-dst }}
-  install -Dm0644 {{ 'target' / 'xdgen' / 'app.desktop' }} {{ desktop-dst }}
-  install -Dm0644 {{ 'target' / 'xdgen' / 'app.metainfo.xml' }} {{ appdata-dst }}
-  install -Dm0644 resources/icon.svg {{ icon-dst }}
+  sudo install -Dm0755 {{ cargo-target-dir / 'release' / name }} {{ bin-dst }}
+  sudo install -Dm0644 {{ 'target' / 'xdgen' / 'app.desktop' }} {{ desktop-dst }}
+  sudo install -Dm0644 {{ 'target' / 'xdgen' / 'app.metainfo.xml' }} {{ appdata-dst }}
+  sudo install -Dm0644 resources/icon.svg {{ icon-dst }}
+
+alias dev := install-dev
+# Builds in debug mode and installs
+install-dev: build-debug install
 
 # Uninstalls installed files
 uninstall:
@@ -86,3 +94,7 @@ tag version:
   git add Cargo.lock
   git commit -m 'release: {{ version }}'
   git tag -a {{ version }} -m ''
+
+# Initialize the project by installing the precommit hook
+init:
+  install -Dm0755 pre-commit.sh .git/hooks/pre-commit

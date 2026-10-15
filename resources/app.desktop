@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=Cosmic Applet Active Window
+Name=Active Window
 Comment=Shows the active window text
 Type=Application
 Icon=com.github.sammyfischer.ActiveWindowApplet

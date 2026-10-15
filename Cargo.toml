@@ -10,6 +10,8 @@ description = "Shows the active window text"
 xdgen = "0.1"
 
 [dependencies]
+anyhow = "1.0.104"
+futures = "0.3.34"
 i18n-embed-fl = "0.10"
 rust-embed = "8.11"
 tokio = { version = "1.52.0", features = ["full"] }

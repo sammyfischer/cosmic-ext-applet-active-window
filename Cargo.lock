@@ -880,6 +880,8 @@ dependencies = [
 name = "cosmic-applet-active-window"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "futures",
  "i18n-embed",
  "i18n-embed-fl",
  "libcosmic",

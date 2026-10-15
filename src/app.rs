@@ -2,19 +2,27 @@
 
 use cosmic::{
   cosmic_config::{self, CosmicConfigEntry},
+  cosmic_theme::Spacing,
   iced::{
+    Alignment,
+    Length,
     Limits,
     Subscription,
+    core::text::Wrapping,
     futures,
     platform_specific::shell::wayland::commands::popup::{destroy_popup, get_popup},
     window::Id,
   },
   prelude::*,
-  widget,
+  widget::{self, layer_container},
 };
 use futures::SinkExt;
 
-use crate::{config::Config, fl};
+use crate::{
+  config::Config,
+  fl,
+  wayland::{ActiveWindow, WaylandEvent, wayland_subscription},
+};
 
 /// The application model stores app-specific state used to describe its
 /// interface and drive its logic.
@@ -28,6 +36,8 @@ pub struct AppModel {
   config: Config,
   /// Example row toggler.
   example_row: bool,
+
+  title: Option<String>,
 }
 
 /// Messages emitted by the application and its widgets.
@@ -38,6 +48,7 @@ pub enum Message {
   SubscriptionChannel,
   UpdateConfig(Config),
   ToggleExampleRow(bool),
+  ActiveWindow(Option<ActiveWindow>),
 }
 
 /// Create a COSMIC application from the app model
@@ -96,8 +107,58 @@ impl cosmic::Application for AppModel {
   /// This view should emit messages to toggle the applet's popup window, which
   /// will be drawn using the `view_window` method.
   fn view(&self) -> Element<'_, Self::Message> {
-    let text = self.core.applet.text("Active Window");
-    self.core.applet.autosize_window(text).into()
+    let ctx = &self.core.applet;
+
+    let Some(title) = self.title.as_deref()
+    else {
+      // no active window, render zero-width
+      return ctx.autosize_window(widget::text("")).into();
+    };
+
+    let Spacing { space_xxs, .. } = cosmic::theme::active().cosmic().spacing;
+    let (icon_size, _) = ctx.suggested_size(true);
+    let (main, cross) = ctx.suggested_padding(true);
+
+    let is_horizontal = ctx.is_horizontal();
+    let (hpadding, vpadding) = if is_horizontal {
+      (main, cross)
+    }
+    else {
+      (cross, main)
+    };
+
+    let button_height = icon_size + 2 * vpadding;
+
+    let text = widget::container(ctx.text(title).wrapping(Wrapping::None))
+      .max_width(self.config.max_width)
+      .clip(true);
+    let mut container = widget::Row::new();
+
+    // if self.config.icon_position == IconPosition::Left {
+    //   container = container.push(icon);
+    // }
+
+    if is_horizontal {
+      // only show text on horizontal panel layout
+      container = container.push(text);
+    }
+
+    // if self.config.icon_position == IconPosition::Right {
+    //   container = container.push(icon);
+    // }
+
+    container = container
+      .spacing(space_xxs) // spacing between elements
+      .align_y(Alignment::Center);
+
+    let button = widget::button::custom(
+      layer_container(container).center_y(Length::Fixed(f32::from(button_height))),
+    )
+    .class(cosmic::theme::Button::AppletIcon)
+    .padding([0, hpadding])
+    .on_press_down(Message::TogglePopup);
+
+    ctx.autosize_window(button).into()
   }
 
   /// The applet's popup window will be drawn using this view method. If there
@@ -120,9 +181,12 @@ impl cosmic::Application for AppModel {
   /// batch, and will continue to execute for the duration that they remain in
   /// the batch.
   fn subscription(&self) -> Subscription<Self::Message> {
-    struct MySubscription;
+    let active_window = wayland_subscription().map(|event| match event {
+      WaylandEvent::Activate(title) => Message::ActiveWindow(title),
+    });
 
     Subscription::batch(vec![
+      active_window,
       // Create a subscription which emits updates through a channel.
       Subscription::run(|| {
         cosmic::iced::stream::channel(
@@ -130,7 +194,7 @@ impl cosmic::Application for AppModel {
           move |mut channel: futures::channel::mpsc::Sender<_>| async move {
             _ = channel.send(Message::SubscriptionChannel).await;
 
-            futures::future::pending().await
+            futures::future::pending::<()>().await;
           },
         )
       }),
@@ -155,6 +219,7 @@ impl cosmic::Application for AppModel {
   /// all tasks are finished.
   fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
     match message {
+      Message::ActiveWindow(active) => self.title = active.map(|it| it.title.clone()),
       Message::SubscriptionChannel => {
         // For example purposes only.
       }
