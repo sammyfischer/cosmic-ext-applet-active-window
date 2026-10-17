@@ -23,6 +23,7 @@ use cosmic::{
 use crate::{
   config::Config,
   fl,
+  template::TitleTemplate,
   wayland::{ActiveWindow, WaylandEvent, wayland_subscription},
 };
 
@@ -41,6 +42,9 @@ pub struct AppModel {
 
   /// Example row toggler
   example_row: bool,
+
+  /// Template used to write the title text
+  template: TitleTemplate,
 
   /// The current active window
   active: Option<ActiveWindow>,
@@ -93,20 +97,29 @@ impl cosmic::Application for AppModel {
   /// Initializes the application with any given flags and startup commands.
   fn init(core: cosmic::Core, _flags: Self::Flags) -> (Self, Task<cosmic::Action<Self::Message>>) {
     // Construct the app model with the runtime's core.
+    let config = cosmic_config::Config::new(Self::APP_ID, Config::VERSION)
+      .map(|context| match Config::get_entry(&context) {
+        Ok(config) => config,
+        Err((_errors, config)) => {
+          // for why in errors {
+          //     tracing::error!(%why, "error loading app config");
+          // }
+
+          config
+        }
+      })
+      .unwrap_or_default();
+
+    let template = config
+      .template
+      .as_deref()
+      .map(|it| TitleTemplate::parse(it).unwrap_or_default())
+      .unwrap_or_default();
+
     let app = AppModel {
       core,
-      config: cosmic_config::Config::new(Self::APP_ID, Config::VERSION)
-        .map(|context| match Config::get_entry(&context) {
-          Ok(config) => config,
-          Err((_errors, config)) => {
-            // for why in errors {
-            //     tracing::error!(%why, "error loading app config");
-            // }
-
-            config
-          }
-        })
-        .unwrap_or_default(),
+      config,
+      template,
       ..Default::default()
     };
 
@@ -154,7 +167,7 @@ impl cosmic::Application for AppModel {
 
     let button_height = icon_width + 2 * vpadding;
 
-    let raw_text = format!("{} | {}", active.app_name, active.title);
+    let raw_text = self.template.replace(&active.app_name, &active.title);
     let text = widget::container(
       ctx
         .text(raw_text.clone())
@@ -262,6 +275,13 @@ impl cosmic::Application for AppModel {
       }
 
       Message::UpdateConfig(config) => {
+        self.template = config
+          .template
+          .as_deref()
+          // TODO: use tracing crate to log parse errors
+          .map(|it| TitleTemplate::parse(it).unwrap_or_default())
+          .unwrap_or_default();
+
         self.config = config;
       }
 

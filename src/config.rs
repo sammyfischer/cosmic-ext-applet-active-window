@@ -7,11 +7,14 @@ use cosmic::cosmic_config::{self, CosmicConfigEntry, cosmic_config_derive::Cosmi
 pub struct Config {
   // pub icon_position: enum IconPosition {Left, Right},
   pub max_width: u32,
-  // pub format: Option<String>,
+  pub template: Option<String>,
 }
 
 impl Default for Config {
   fn default() -> Self {
-    Self { max_width: 400 }
+    Self {
+      max_width: 400,
+      template: None,
+    }
   }
 }

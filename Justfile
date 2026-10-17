@@ -47,9 +47,13 @@ fmt:
 lint *args:
   cargo clippy --all-features {{ args }} -- -W clippy::pedantic
 
+# Runs unit tests
+test:
+  cargo test
+
 alias ck := check
 # Checks for compliance (formats and lints)
-check: fmt lint
+check: fmt lint test
 
 # Runs a clippy check with JSON message format
 check-json: (lint '--message-format=json')

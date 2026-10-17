@@ -17,4 +17,5 @@ staged_rs=$(echo "$staged" | grep '\.rs$' || true)
 # lint and test if there are staged rust files
 if [ -n "$staged_rs" ]; then
   cargo clippy --all-features -- -W clippy::pedantic
+  cargo test
 fi
