@@ -144,7 +144,15 @@ impl ToplevelInfoHandler for WindowData {
 
       // definitely changed
       (Some(active), None) => {
-        self.last_sent = Some(active);
+        self.last_sent = Some(active.clone());
+
+        if self
+          .tx
+          .unbounded_send(WaylandEvent::Activate(Some(active)))
+          .is_err()
+        {
+          self.exit = true;
+        }
       }
 
       // might've changed

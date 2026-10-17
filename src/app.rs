@@ -12,14 +12,13 @@ use cosmic::{
     Limits,
     Subscription,
     core::text::Wrapping,
-    futures,
     platform_specific::shell::wayland::commands::popup::{destroy_popup, get_popup},
     window::Id,
   },
   prelude::*,
+  surface,
   widget::{self, layer_container},
 };
-use futures::SinkExt;
 
 use crate::{
   config::Config,
@@ -31,27 +30,42 @@ use crate::{
 /// interface and drive its logic.
 #[derive(Default)]
 pub struct AppModel {
-  /// Application state which is managed by the COSMIC runtime.
+  /// Application state which is managed by the COSMIC runtime
   core: cosmic::Core,
-  /// The popup id.
+
+  /// The popup window id
   popup: Option<Id>,
-  /// Configuration data that persists between application runs.
+
+  /// Configuration data that persists between application runs
   config: Config,
-  /// Example row toggler.
+
+  /// Example row toggler
   example_row: bool,
 
+  /// The current active window
   active: Option<ActiveWindow>,
 }
 
 /// Messages emitted by the application and its widgets.
 #[derive(Debug, Clone)]
 pub enum Message {
-  TogglePopup,
-  PopupClosed(Id),
-  SubscriptionChannel,
-  UpdateConfig(Config),
-  ToggleExampleRow(bool),
+  /// A window was activated
   ActiveWindow(Option<ActiveWindow>),
+
+  /// The full-title tooltip surfaced
+  TooltipSurface(surface::Action<Message>),
+
+  /// The popup window was toggled
+  TogglePopup,
+
+  /// The popup window was closed
+  PopupClosed(Id),
+
+  /// The config was written to
+  UpdateConfig(Config),
+
+  /// TODO: template code
+  ToggleExampleRow(bool),
 }
 
 /// Create a COSMIC application from the app model
@@ -140,13 +154,10 @@ impl cosmic::Application for AppModel {
 
     let button_height = icon_width + 2 * vpadding;
 
-    let text = widget::container(
-      ctx
-        .text(format!("{} | {}", active.app_name, active.title))
-        .wrapping(Wrapping::None),
-    )
-    .max_width(self.config.max_width.clamp(50, 1000))
-    .clip(true);
+    let raw_text = format!("{} | {}", active.app_name, active.title);
+    let text = widget::container(ctx.text(raw_text.clone()).wrapping(Wrapping::None))
+      .max_width(self.config.max_width.clamp(50, 1000))
+      .clip(true);
 
     let icon = widget::icon(icon_handle)
       .class(if symbolic {
@@ -187,7 +198,15 @@ impl cosmic::Application for AppModel {
     .padding([0, hpadding])
     .on_press_down(Message::TogglePopup);
 
-    ctx.autosize_window(button).into()
+    let tooltip = self.core.applet.applet_tooltip(
+      button,
+      textwrap::fill(&raw_text, 60),
+      self.popup.is_some(),
+      Message::TooltipSurface,
+      None,
+    );
+
+    ctx.autosize_window(tooltip).into()
   }
 
   /// The applet's popup window will be drawn using this view method. If there
@@ -210,35 +229,18 @@ impl cosmic::Application for AppModel {
   /// batch, and will continue to execute for the duration that they remain in
   /// the batch.
   fn subscription(&self) -> Subscription<Self::Message> {
+    // listen for wayland toplevel events to track the currently active window
     let active_window = wayland_subscription().map(|event| match event {
       WaylandEvent::Activate(title) => Message::ActiveWindow(title),
     });
 
-    Subscription::batch(vec![
-      active_window,
-      // Create a subscription which emits updates through a channel.
-      Subscription::run(|| {
-        cosmic::iced::stream::channel(
-          4,
-          move |mut channel: futures::channel::mpsc::Sender<_>| async move {
-            _ = channel.send(Message::SubscriptionChannel).await;
+    // watch for config changes
+    let config = self
+      .core()
+      .watch_config::<Config>(Self::APP_ID)
+      .map(|update| Message::UpdateConfig(update.config));
 
-            futures::future::pending::<()>().await;
-          },
-        )
-      }),
-      // Watch for application configuration changes.
-      self
-        .core()
-        .watch_config::<Config>(Self::APP_ID)
-        .map(|update| {
-          // for why in update.errors {
-          //     tracing::error!(?why, "app config error");
-          // }
-
-          Message::UpdateConfig(update.config)
-        }),
-    ])
+    Subscription::batch(vec![active_window, config])
   }
 
   /// Handles messages emitted by the application and its widgets.
@@ -249,13 +251,16 @@ impl cosmic::Application for AppModel {
   fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
     match message {
       Message::ActiveWindow(active) => self.active = active,
-      Message::SubscriptionChannel => {
-        // For example purposes only.
+
+      Message::TooltipSurface(action) => {
+        // cosmic manages the tooltip action
+        return cosmic::task::message(cosmic::Action::Surface(action));
       }
+
       Message::UpdateConfig(config) => {
         self.config = config;
       }
-      Message::ToggleExampleRow(toggled) => self.example_row = toggled,
+
       Message::TogglePopup => {
         return if let Some(p) = self.popup.take() {
           destroy_popup(p)
@@ -278,11 +283,14 @@ impl cosmic::Application for AppModel {
           get_popup(popup_settings)
         };
       }
+
       Message::PopupClosed(id) => {
         if self.popup.as_ref() == Some(&id) {
           self.popup = None;
         }
       }
+
+      Message::ToggleExampleRow(toggled) => self.example_row = toggled,
     }
     Task::none()
   }
