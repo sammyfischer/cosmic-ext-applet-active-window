@@ -11,7 +11,7 @@ use cosmic::{
     Length,
     Limits,
     Subscription,
-    core::text::Wrapping,
+    core::text::{Ellipsize, EllipsizeHeightLimit, Wrapping},
     platform_specific::shell::wayland::commands::popup::{destroy_popup, get_popup},
     window::Id,
   },
@@ -155,9 +155,13 @@ impl cosmic::Application for AppModel {
     let button_height = icon_width + 2 * vpadding;
 
     let raw_text = format!("{} | {}", active.app_name, active.title);
-    let text = widget::container(ctx.text(raw_text.clone()).wrapping(Wrapping::None))
-      .max_width(self.config.max_width.clamp(50, 1000))
-      .clip(true);
+    let text = widget::container(
+      ctx
+        .text(raw_text.clone())
+        .wrapping(Wrapping::None)
+        .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
+    )
+    .max_width(self.config.max_width.clamp(50, 1000));
 
     let icon = widget::icon(icon_handle)
       .class(if symbolic {
@@ -198,7 +202,7 @@ impl cosmic::Application for AppModel {
     .padding([0, hpadding])
     .on_press_down(Message::TogglePopup);
 
-    let tooltip = self.core.applet.applet_tooltip(
+    let tooltip = ctx.applet_tooltip(
       button,
       textwrap::fill(&raw_text, 60),
       self.popup.is_some(),
