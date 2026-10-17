@@ -29,6 +29,8 @@ features = [
   "applet-token",
   # Uses cosmic-settings-daemon to watch for config file changes
   "dbus-config",
+  # Desktop file helpers
+  "desktop",
   # Support creating additional application windows.
   "multi-window",
   # Uses tokio as the executor for the runtime

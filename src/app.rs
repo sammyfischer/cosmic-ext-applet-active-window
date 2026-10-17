@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use std::rc::Rc;
+
 use cosmic::{
   cosmic_config::{self, CosmicConfigEntry},
   cosmic_theme::Spacing,
+  desktop::IconSourceExt,
   iced::{
     Alignment,
     Length,
@@ -37,7 +40,7 @@ pub struct AppModel {
   /// Example row toggler.
   example_row: bool,
 
-  title: Option<String>,
+  active: Option<ActiveWindow>,
 }
 
 /// Messages emitted by the application and its widgets.
@@ -109,14 +112,22 @@ impl cosmic::Application for AppModel {
   fn view(&self) -> Element<'_, Self::Message> {
     let ctx = &self.core.applet;
 
-    let Some(title) = self.title.as_deref()
+    let Some(active) = self.active.as_ref()
     else {
-      // no active window, render zero-width
-      return ctx.autosize_window(widget::text("")).into();
+      // no active window, render nothing
+      return ctx.autosize_window(widget::space()).into();
     };
 
+    // a lot of this code is adapted from
+    // [cosmic::applet::Context::icon_button_from_handle] (specifically the size
+    // calculations)
+    let icon_handle = active.icon_source.as_cosmic_icon();
+    let symbolic = icon_handle.symbolic;
+
     let Spacing { space_xxs, .. } = cosmic::theme::active().cosmic().spacing;
-    let (icon_size, _) = ctx.suggested_size(true);
+
+    // the sizing looks better when `is_symbolic` is always true
+    let (icon_width, icon_height) = ctx.suggested_size(true);
     let (main, cross) = ctx.suggested_padding(true);
 
     let is_horizontal = ctx.is_horizontal();
@@ -127,15 +138,32 @@ impl cosmic::Application for AppModel {
       (cross, main)
     };
 
-    let button_height = icon_size + 2 * vpadding;
+    let button_height = icon_width + 2 * vpadding;
 
-    let text = widget::container(ctx.text(title).wrapping(Wrapping::None))
-      .max_width(self.config.max_width)
-      .clip(true);
+    let text = widget::container(
+      ctx
+        .text(format!("{} | {}", active.app_name, active.title))
+        .wrapping(Wrapping::None),
+    )
+    .max_width(self.config.max_width.clamp(50, 1000))
+    .clip(true);
+
+    let icon = widget::icon(icon_handle)
+      .class(if symbolic {
+        cosmic::theme::Svg::Custom(Rc::new(|theme| widget::svg::Style {
+          color: Some(theme.cosmic().background(theme.transparent).on.into()),
+        }))
+      }
+      else {
+        cosmic::theme::Svg::default()
+      })
+      .width(Length::Fixed(f32::from(icon_width)))
+      .height(Length::Fixed(f32::from(icon_height)));
+
     let mut container = widget::Row::new();
 
     // if self.config.icon_position == IconPosition::Left {
-    //   container = container.push(icon);
+    container = container.push(icon);
     // }
 
     if is_horizontal {
@@ -149,7 +177,8 @@ impl cosmic::Application for AppModel {
 
     container = container
       .spacing(space_xxs) // spacing between elements
-      .align_y(Alignment::Center);
+      .align_y(Alignment::Center)
+      .height(icon_width);
 
     let button = widget::button::custom(
       layer_container(container).center_y(Length::Fixed(f32::from(button_height))),
@@ -219,7 +248,7 @@ impl cosmic::Application for AppModel {
   /// all tasks are finished.
   fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
     match message {
-      Message::ActiveWindow(active) => self.title = active.map(|it| it.title.clone()),
+      Message::ActiveWindow(active) => self.active = active,
       Message::SubscriptionChannel => {
         // For example purposes only.
       }

@@ -65,9 +65,11 @@ install:
   sudo install -Dm0644 {{ 'target' / 'xdgen' / 'app.metainfo.xml' }} {{ appdata-dst }}
   sudo install -Dm0644 resources/icon.svg {{ icon-dst }}
 
-alias dev := install-dev
 # Builds in debug mode and installs
 install-dev: build-debug install
+
+# Builds in release mode and installs
+install-release: build-release install
 
 # Uninstalls installed files
 uninstall:

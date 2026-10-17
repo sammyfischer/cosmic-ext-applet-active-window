@@ -1,4 +1,4 @@
-app-title = Cosmic Applet Active Window
+app-title = Active Window
 app-comment = Shows the active window text
 app-keywords =
 about = About

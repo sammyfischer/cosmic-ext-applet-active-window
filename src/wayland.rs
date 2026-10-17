@@ -16,9 +16,17 @@ use cosmic::{
       self,
       registry::{ProvidesRegistryState, RegistryState},
     },
-    toplevel_info::{ToplevelInfo, ToplevelInfoHandler, ToplevelInfoState},
+    toplevel_info::{ToplevelInfoHandler, ToplevelInfoState},
     wayland_client::{Connection, QueueHandle, globals::registry_queue_init},
     wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1 as ToplevelHandle,
+  },
+  desktop::{
+    DesktopEntryCache,
+    DesktopEntryData,
+    DesktopLookupContext,
+    DesktopResolveOptions,
+    fde::{self, IconSource},
+    resolve_desktop_entry,
   },
   iced::Subscription,
 };
@@ -32,10 +40,11 @@ pub struct WindowData {
   tx: UnboundedSender<WaylandEvent>,
   registry_state: RegistryState,
   toplevel_state: ToplevelInfoState,
+  desktop_cache: DesktopEntryCache,
   last_sent: Option<ActiveWindow>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct ActiveWindow {
   /// The displayed title text of the window. This can be arbitrarily set by the
   /// application.
@@ -43,14 +52,17 @@ pub struct ActiveWindow {
 
   /// The name of the app. This may be a name or an RDNN.
   pub app_id: String,
+
+  /// The user-friendly app name, which doesn't need to be unique.
+  pub app_name: String,
+
+  /// The app icon
+  pub icon_source: IconSource,
 }
 
-impl From<&ToplevelInfo> for ActiveWindow {
-  fn from(value: &ToplevelInfo) -> Self {
-    Self {
-      title: value.title.clone(),
-      app_id: value.app_id.clone(),
-    }
+impl PartialEq for ActiveWindow {
+  fn eq(&self, other: &Self) -> bool {
+    self.app_id == other.app_id && self.title == other.title
   }
 }
 
@@ -78,24 +90,77 @@ impl ToplevelInfoHandler for WindowData {
   fn toplevel_closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &ToplevelHandle) {}
 
   fn info_done(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>) {
-    let active: Option<ActiveWindow> = self
+    let active = self
       .toplevel_state
       .toplevels()
       .find(|info| info.state.contains(&State::Activated))
-      .map(Into::into);
+      .map(|info| {
+        let title = info.title.clone();
+        let app_id = info.app_id.clone();
 
-    // send title if it changed
-    if active != self.last_sent {
-      self.last_sent.clone_from(&active);
+        let ctx = DesktopLookupContext::new(info.app_id.as_str())
+          .with_identifier(info.identifier.as_str())
+          .with_title(info.title.as_str());
 
-      // set exit flag if it errors (it only errors when the receiver is
-      // dropped/closed)
-      if self
-        .tx
-        .unbounded_send(WaylandEvent::Activate(active))
-        .is_err()
-      {
-        self.exit = true;
+        let opts = DesktopResolveOptions::default();
+        let entry = resolve_desktop_entry(&mut self.desktop_cache, &ctx, &opts);
+        let is_fallback = entry.path.is_empty(); // the fallback for an unmatched appid can be detected if the path is empty
+
+        let data = DesktopEntryData::from_desktop_entry(self.desktop_cache.locales(), entry);
+        let app_name = if is_fallback {
+          // the fallback is to use the window title (which is redundant), use
+          // the appid instead
+          app_id.clone()
+        }
+        else {
+          data.name
+        };
+        let icon_source = data.icon;
+
+        ActiveWindow {
+          title,
+          app_id,
+          app_name,
+          icon_source,
+        }
+      });
+
+    match (active, &self.last_sent) {
+      // didn't change
+      (None, None) => {}
+
+      // definitely changed
+      (None, Some(_)) => {
+        self.last_sent = None;
+
+        if self
+          .tx
+          .unbounded_send(WaylandEvent::Activate(None))
+          .is_err()
+        {
+          self.exit = true;
+        }
+      }
+
+      // definitely changed
+      (Some(active), None) => {
+        self.last_sent = Some(active);
+      }
+
+      // might've changed
+      (Some(active), Some(last_sent)) => {
+        // if changed
+        if active.app_id != last_sent.app_id || active.title != last_sent.title {
+          self.last_sent = Some(active.clone());
+
+          if self
+            .tx
+            .unbounded_send(WaylandEvent::Activate(Some(active)))
+            .is_err()
+          {
+            self.exit = true;
+          }
+        }
       }
     }
   }
@@ -121,39 +186,21 @@ pub fn wayland_handler(tx: UnboundedSender<WaylandEvent>) -> anyhow::Result<()> 
     registry_queue_init(&conn).context("failed to initialize registry queue")?;
   let queue_handle = event_queue.handle();
 
-  // let mut event_loop = calloop::EventLoop::<WindowData>::try_new()?;
-  // let loop_handle = event_loop.handle();
-
-  // let wayland_source = WaylandSource::new(conn, event_queue);
-  // wayland_source
-  //   .insert(loop_handle.clone())
-  //   .context("failed to add wayland source into event loop")?;
-
-  // if loop_handle
-  //   .insert_source(rx, |event, _, window_data| match event {
-  //     calloop::channel::Event::Msg(()) => {}
-  //     calloop::channel::Event::Closed => window_data.exit = true,
-  //   })
-  //   .is_err()
-  // {
-  //   bail!("failed to insert loop handle source");
-  // };
-
   let registry_state = RegistryState::new(&global_list);
   let toplevel_state = ToplevelInfoState::new(&registry_state, &queue_handle);
+  let desktop_cache = DesktopEntryCache::new(fde::get_languages_from_env());
+
   let mut window_data = WindowData {
     exit: false,
     tx,
     registry_state,
     toplevel_state,
+    desktop_cache,
     last_sent: None,
   };
 
   while !window_data.exit {
     event_queue.blocking_dispatch(&mut window_data)?;
-    // event_loop
-    //   .dispatch(None, &mut window_data)
-    //   .context("failed to dispatch an event")?;
   }
 
   Ok(())
