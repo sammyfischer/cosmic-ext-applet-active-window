@@ -6,7 +6,7 @@
   <name>Active Window</name>
   <summary>Shows the active window text</summary>
   <icon type="remote" width="64" height="64" scale="1">
-    https://github.com/sammyfischer/cosmic-applet-active-window/raw/main/resources/icons/hicolor/scalable/apps/icon.svg
+    https://github.com/sammyfischer/cosmic-applet-active-window/raw/main/resources/icons/hicolor/512x512/apps/icon.svg
   </icon>
   <url type="vcs-browser">https://github.com/sammyfischer/cosmic-applet-active-window</url>
   <launchable type="desktop-id">com.github.sammyfischer.ActiveWindowApplet.desktop</launchable>

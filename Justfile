@@ -13,7 +13,8 @@ cargo-target-dir := env('CARGO_TARGET_DIR', 'target')
 appdata-dst := base-dir / 'share' / 'appdata' / appdata
 bin-dst := base-dir / 'bin' / name
 desktop-dst := base-dir / 'share' / 'applications' / desktop
-icon-dst := base-dir / 'share' / 'icons' / 'hicolor' / 'scalable' / 'apps' / appid + '.svg'
+# icon-dst := base-dir / 'share' / 'icons' / 'hicolor' / 'scalable' / 'apps' / appid + '.svg'
+icon-dst := base-dir / 'share' / 'icons' / 'hicolor' / '512x512' / 'apps' / appid + '.png'
 
 # Default recipe which runs `just build-release`
 default: build-release
@@ -67,7 +68,7 @@ install:
   sudo install -Dm0755 {{ cargo-target-dir / 'release' / name }} {{ bin-dst }}
   sudo install -Dm0644 {{ 'target' / 'xdgen' / 'app.desktop' }} {{ desktop-dst }}
   sudo install -Dm0644 {{ 'target' / 'xdgen' / 'app.metainfo.xml' }} {{ appdata-dst }}
-  sudo install -Dm0644 resources/icon.svg {{ icon-dst }}
+  sudo install -Dm0644 resources/512x512.png {{ icon-dst }}
 
 # Builds in debug mode and installs
 install-dev: build-debug install
