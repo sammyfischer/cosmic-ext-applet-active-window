@@ -9,6 +9,7 @@ use cosmic::{
   iced::{
     Alignment,
     Length,
+    Rectangle,
     Subscription,
     core::text::{Ellipsize, EllipsizeHeightLimit, Wrapping},
     platform_specific::shell::wayland::commands::popup::destroy_popup,
@@ -16,7 +17,15 @@ use cosmic::{
   },
   prelude::*,
   surface::{self, action::LiveSettings},
-  widget::{self, Row, column, layer_container, row},
+  widget::{
+    self,
+    RectangleTracker,
+    Row,
+    column,
+    layer_container,
+    rectangle_tracker::{RectangleUpdate, rectangle_tracker_subscription},
+    row,
+  },
 };
 
 use crate::{
@@ -25,6 +34,8 @@ use crate::{
   template::TitleTemplate,
   wayland::{ActiveWindow, WaylandEvent, wayland_subscription},
 };
+
+const RECTANGLE_ID: u32 = 0;
 
 /// The application model stores app-specific state used to describe its
 /// interface and drive its logic.
@@ -47,6 +58,11 @@ pub struct AppModel {
 
   /// The current active window
   active: Option<ActiveWindow>,
+
+  /// The tracker for the applet's bounds
+  rectangle_tracker: Option<RectangleTracker<u32>>,
+  /// The applet's bounds
+  rectangle: Rectangle,
 }
 
 /// Messages emitted by the application and its widgets.
@@ -75,6 +91,9 @@ pub enum Message {
   /// The template text input was unfocused or submitted. No argument, commit
   /// the saved buffer
   CommitTemplate,
+
+  /// The bounds of the applet changed
+  Rectangle(RectangleUpdate<u32>),
 }
 
 /// Create a COSMIC application from the app model
@@ -230,7 +249,12 @@ impl cosmic::Application for AppModel {
     .on_press_down(Message::TogglePopup);
 
     let tooltip = ctx.applet_tooltip(
-      button,
+      if let Some(tracker) = self.rectangle_tracker.as_ref() {
+        Element::from(tracker.container(RECTANGLE_ID, button))
+      }
+      else {
+        Element::from(button)
+      },
       textwrap::fill(&raw_text, 60),
       self.popup.is_some(),
       Message::TooltipSurface,
@@ -312,7 +336,11 @@ impl cosmic::Application for AppModel {
       .watch_config::<Config>(Self::APP_ID)
       .map(|update| Message::UpdateConfig(update.config));
 
-    Subscription::batch(vec![active_window, config])
+    // track the applet's bounds
+    let rectangle =
+      rectangle_tracker_subscription(RECTANGLE_ID).map(|(_, update)| Message::Rectangle(update));
+
+    Subscription::batch(vec![active_window, config, rectangle])
   }
 
   /// Handles messages emitted by the application and its widgets.
@@ -320,6 +348,8 @@ impl cosmic::Application for AppModel {
   /// Tasks may be returned for asynchronous execution of code in the background
   /// on the application's async runtime. The application will not exit until
   /// all tasks are finished.
+  #[allow(clippy::too_many_lines)]
+  #[allow(clippy::cast_possible_truncation)]
   fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
     match message {
       Message::ActiveWindow(active) => self.active = active,
@@ -331,19 +361,13 @@ impl cosmic::Application for AppModel {
 
       Message::UpdateConfig(config) => {
         self.config = config;
-
         self.template_buf = self.config.template.clone().unwrap_or_default();
 
-        self.template = self
-          .config
-          .template
-          .as_deref()
-          .map(|it| {
-            TitleTemplate::parse(it)
-              .inspect_err(|why| tracing::error!(?why, "failed to parse template '{it}'"))
-              .unwrap_or_default()
-          })
-          .unwrap_or_default();
+        self.template = self.config.template.as_deref().map_or_default(|it| {
+          TitleTemplate::parse(it)
+            .inspect_err(|why| tracing::error!(?why, "failed to parse template '{it}'"))
+            .unwrap_or_default()
+        });
       }
 
       Message::UpdateMaxWidth(w) => {
@@ -387,8 +411,7 @@ impl cosmic::Application for AppModel {
             .inspect_err(|why| tracing::error!(?why, "failed to set template '{:?}'", template));
         }
         else {
-          // there was an error resolving the config handle, so we just have to
-          // write in-memory
+          // there was an error resolving the config handle, write in-memory
           self.config.template.clone_from(&template);
         }
 
@@ -407,7 +430,7 @@ impl cosmic::Application for AppModel {
               let new_id = Id::unique();
               app.popup.replace(new_id);
 
-              let settings = app.core.applet.get_popup_settings(
+              let mut settings = app.core.applet.get_popup_settings(
                 app.core.main_window_id().unwrap(),
                 new_id,
                 None,
@@ -415,15 +438,23 @@ impl cosmic::Application for AppModel {
                 None,
               );
 
+              // from cosmic-applet-time
               // the popup is designed for a single icon, and doesn't center
-              // properly for an applet that has a higher width. manually
-              // set it here
-              // settings.positioner.anchor_rect = Rectangle {
-              //   x: 0,
-              //   y: 0,
-              //   width: self.width, // store width
-              //   height: self.height, // and height
-              // };
+              // properly for an applet that has a higher width
+              let Rectangle {
+                x,
+                y,
+                width,
+                height,
+              } = app.rectangle;
+
+              settings.positioner.anchor_rect = Rectangle::<i32> {
+                x: x.max(1.0) as i32,
+                y: y.max(1.0) as i32,
+                width: width.max(1.0) as i32,
+                height: height.max(1.0) as i32,
+              };
+              settings.positioner.size = None; // autosize
 
               settings
             },
@@ -437,6 +468,11 @@ impl cosmic::Application for AppModel {
           self.popup = None;
         }
       }
+
+      Message::Rectangle(update) => match update {
+        RectangleUpdate::Init(tracker) => self.rectangle_tracker = Some(tracker),
+        RectangleUpdate::Rectangle((_, rect)) => self.rectangle = rect,
+      },
     }
 
     Task::none()
