@@ -16,6 +16,9 @@ i18n-embed-fl = "0.10"
 rust-embed = "8.11"
 textwrap = "0.16.4"
 tokio = { version = "1.52.0", features = ["full"] }
+tracing = "0.1.44"
+tracing-journald = "0.3.2"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dependencies.i18n-embed]
 version = "0.16"

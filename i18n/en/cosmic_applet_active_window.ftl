@@ -1,5 +1,7 @@
 app-title = Active Window
 app-comment = Shows the active window text
+config-max-width = Max title width (px)
+config-template = Title template
 app-keywords =
 about = About
 view = View

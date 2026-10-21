@@ -9,15 +9,14 @@ use cosmic::{
   iced::{
     Alignment,
     Length,
-    Limits,
     Subscription,
     core::text::{Ellipsize, EllipsizeHeightLimit, Wrapping},
-    platform_specific::shell::wayland::commands::popup::{destroy_popup, get_popup},
+    platform_specific::shell::wayland::commands::popup::destroy_popup,
     window::Id,
   },
   prelude::*,
-  surface,
-  widget::{self, layer_container},
+  surface::{self, action::LiveSettings},
+  widget::{self, Row, column, layer_container, row},
 };
 
 use crate::{
@@ -39,12 +38,12 @@ pub struct AppModel {
 
   /// Configuration data that persists between application runs
   config: Config,
-
-  /// Example row toggler
-  example_row: bool,
+  config_handle: Option<cosmic_config::Config>,
 
   /// Template used to write the title text
   template: TitleTemplate,
+  /// Buffer for the template text input field
+  template_buf: String,
 
   /// The current active window
   active: Option<ActiveWindow>,
@@ -68,8 +67,14 @@ pub enum Message {
   /// The config was written to
   UpdateConfig(Config),
 
-  /// TODO: template code
-  ToggleExampleRow(bool),
+  /// The max-width value was changed in the ui
+  UpdateMaxWidth(u32),
+
+  /// Characters were typed in the template text input
+  UpdateTemplateBuffer(String),
+  /// The template text input was unfocused or submitted. No argument, commit
+  /// the saved buffer
+  CommitTemplate,
 }
 
 /// Create a COSMIC application from the app model
@@ -97,13 +102,16 @@ impl cosmic::Application for AppModel {
   /// Initializes the application with any given flags and startup commands.
   fn init(core: cosmic::Core, _flags: Self::Flags) -> (Self, Task<cosmic::Action<Self::Message>>) {
     // Construct the app model with the runtime's core.
-    let config = cosmic_config::Config::new(Self::APP_ID, Config::VERSION)
-      .map(|context| match Config::get_entry(&context) {
+    let config_handle = cosmic_config::Config::new(Self::APP_ID, Config::VERSION).ok();
+
+    let config = config_handle
+      .as_ref()
+      .map(|context| match Config::get_entry(context) {
         Ok(config) => config,
-        Err((_errors, config)) => {
-          // for why in errors {
-          //     tracing::error!(%why, "error loading app config");
-          // }
+        Err((errors, config)) => {
+          for why in errors {
+            tracing::error!(%why, "error loading app config");
+          }
 
           config
         }
@@ -113,13 +121,19 @@ impl cosmic::Application for AppModel {
     let template = config
       .template
       .as_deref()
-      .map(|it| TitleTemplate::parse(it).unwrap_or_default())
-      .unwrap_or_default();
+      .map_or_default(|it| TitleTemplate::parse(it).unwrap_or_default());
+
+    let template_buf = config
+      .template
+      .as_deref()
+      .map_or_default(ToString::to_string); // maps None to empty string, which is what we want
 
     let app = AppModel {
       core,
       config,
+      config_handle,
       template,
+      template_buf,
       ..Default::default()
     };
 
@@ -230,12 +244,53 @@ impl cosmic::Application for AppModel {
   /// are multiple poups, you may match the id parameter to determine which
   /// popup to create a view for.
   fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
-    let content_list = widget::list_column().add(widget::settings::item(
-      fl!("example-row"),
-      widget::toggler(self.example_row).on_toggle(Message::ToggleExampleRow),
-    ));
+    /// A field in the settings form. Becomes a row in the settings list, which
+    /// is a column.
+    struct Field<'elem> {
+      label: widget::Text<'elem, cosmic::Theme>,
+      input: Element<'elem, Message>,
+    }
 
-    self.core.applet.popup_container(content_list).into()
+    impl<'elem> Field<'elem> {
+      /// Build the field into a row that slots into a column, with common
+      /// sizing/padding applied
+      fn build(self) -> Row<'elem, Message, cosmic::Theme> {
+        row![
+          cosmic::applet::padded_control(self.label.size(14).wrapping(Wrapping::None)),
+          widget::space::horizontal(),
+          cosmic::applet::padded_control(self.input).width(200)
+        ]
+        .align_y(Alignment::Center)
+      }
+    }
+
+    let ctx = &self.core.applet;
+    let Spacing { space_xxs, .. } = cosmic::theme::spacing();
+
+    let set_max_width = Field {
+      label: widget::text::body(fl!("config-max-width")),
+
+      input: widget::slider(50..=1000, self.config.max_width, Message::UpdateMaxWidth)
+        .step(50u32)
+        .width(Length::Fill)
+        .into(),
+    };
+
+    let set_template = Field {
+      label: widget::text::body(fl!("config-template")),
+
+      input: widget::text_input("template", &self.template_buf)
+        .on_input(Message::UpdateTemplateBuffer)
+        .on_unfocus(Message::CommitTemplate)
+        .on_submit(|_| Message::CommitTemplate)
+        .into(),
+    };
+
+    let content = column![set_max_width.build(), set_template.build()]
+      .align_x(Alignment::Start)
+      .padding([space_xxs, 0]);
+
+    ctx.popup_container(widget::container(content)).into()
   }
 
   /// Register subscriptions for this application.
@@ -275,14 +330,69 @@ impl cosmic::Application for AppModel {
       }
 
       Message::UpdateConfig(config) => {
-        self.template = config
+        self.config = config;
+
+        self.template_buf = self.config.template.clone().unwrap_or_default();
+
+        self.template = self
+          .config
           .template
           .as_deref()
-          // TODO: use tracing crate to log parse errors
-          .map(|it| TitleTemplate::parse(it).unwrap_or_default())
+          .map(|it| {
+            TitleTemplate::parse(it)
+              .inspect_err(|why| tracing::error!(?why, "failed to parse template '{it}'"))
+              .unwrap_or_default()
+          })
           .unwrap_or_default();
+      }
 
-        self.config = config;
+      Message::UpdateMaxWidth(w) => {
+        if let Some(handle) = &self.config_handle {
+          if let Err(why) = self.config.set_max_width(handle, w) {
+            tracing::error!(?why, "failed to write max width config to disk");
+          }
+        }
+        else {
+          self.config.max_width = w;
+        }
+      }
+
+      Message::UpdateTemplateBuffer(template) => {
+        self.template_buf.clone_from(&template);
+      }
+
+      Message::CommitTemplate => {
+        // get template but set empty string to None
+        let template = Some(self.template_buf.clone()).filter(|it| !it.is_empty());
+
+        let parsed = match template.as_deref() {
+          Some(template) => match TitleTemplate::parse(template) {
+            Ok(it) => it,
+
+            // if parse fails, refuse to set template
+            Err(why) => {
+              tracing::error!(?why, "failed to parse template '{template}'");
+              return Task::none();
+            }
+          },
+
+          None => TitleTemplate::default(),
+        };
+
+        if let Some(handle) = self.config_handle.as_ref() {
+          // writes to config file (if value changed) and sets it in-memory
+          let _ = self
+            .config
+            .set_template(handle, template.clone())
+            .inspect_err(|why| tracing::error!(?why, "failed to set template '{:?}'", template));
+        }
+        else {
+          // there was an error resolving the config handle, so we just have to
+          // write in-memory
+          self.config.template.clone_from(&template);
+        }
+
+        self.template = parsed;
       }
 
       Message::TogglePopup => {
@@ -290,21 +400,35 @@ impl cosmic::Application for AppModel {
           destroy_popup(p)
         }
         else {
-          let new_id = Id::unique();
-          self.popup.replace(new_id);
-          let mut popup_settings = self.core.applet.get_popup_settings(
-            self.core.main_window_id().unwrap(),
-            new_id,
+          // needs to be sent as a task for frosted glass blur to work
+          cosmic::surface::surface_task(cosmic::surface::action::app_popup(
+            |_| LiveSettings::default(),
+            |app: &mut Self| {
+              let new_id = Id::unique();
+              app.popup.replace(new_id);
+
+              let settings = app.core.applet.get_popup_settings(
+                app.core.main_window_id().unwrap(),
+                new_id,
+                None,
+                None,
+                None,
+              );
+
+              // the popup is designed for a single icon, and doesn't center
+              // properly for an applet that has a higher width. manually
+              // set it here
+              // settings.positioner.anchor_rect = Rectangle {
+              //   x: 0,
+              //   y: 0,
+              //   width: self.width, // store width
+              //   height: self.height, // and height
+              // };
+
+              settings
+            },
             None,
-            None,
-            None,
-          );
-          popup_settings.positioner.size_limits = Limits::NONE
-            .max_width(372.0)
-            .min_width(300.0)
-            .min_height(200.0)
-            .max_height(1080.0);
-          get_popup(popup_settings)
+          ))
         };
       }
 
@@ -313,9 +437,8 @@ impl cosmic::Application for AppModel {
           self.popup = None;
         }
       }
-
-      Message::ToggleExampleRow(toggled) => self.example_row = toggled,
     }
+
     Task::none()
   }
 
