@@ -24,11 +24,11 @@ use cosmic::{
     column,
     layer_container,
     rectangle_tracker::{RectangleUpdate, rectangle_tracker_subscription},
-    row,
   },
 };
 
 use crate::{
+  components::slider_input::{SliderInput, SliderInputMessage},
   config::Config,
   fl,
   template::TitleTemplate,
@@ -50,6 +50,8 @@ pub struct AppModel {
   /// Configuration data that persists between application runs
   config: Config,
   config_handle: Option<cosmic_config::Config>,
+
+  max_width_slider: SliderInput,
 
   /// Template used to write the title text
   template: TitleTemplate,
@@ -84,7 +86,7 @@ pub enum Message {
   UpdateConfig(Config),
 
   /// The max-width value was changed in the ui
-  UpdateMaxWidth(u32),
+  UpdateMaxWidth(SliderInputMessage),
 
   /// Characters were typed in the template text input
   UpdateTemplateBuffer(String),
@@ -147,7 +149,7 @@ impl cosmic::Application for AppModel {
       .as_deref()
       .map_or_default(ToString::to_string); // maps None to empty string, which is what we want
 
-    let app = AppModel {
+    let mut app = AppModel {
       core,
       config,
       config_handle,
@@ -155,6 +157,7 @@ impl cosmic::Application for AppModel {
       template_buf,
       ..Default::default()
     };
+    app.track_slider_input();
 
     (app, Task::none())
   }
@@ -268,40 +271,44 @@ impl cosmic::Application for AppModel {
   /// are multiple poups, you may match the id parameter to determine which
   /// popup to create a view for.
   fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
-    /// A field in the settings form. Becomes a row in the settings list, which
-    /// is a column.
+    /// A field in the settings form. This is just a pair of the field's label
+    /// and input element.
     struct Field<'elem> {
-      label: widget::Text<'elem, cosmic::Theme>,
+      label: String,
       input: Element<'elem, Message>,
     }
 
-    impl<'elem> Field<'elem> {
-      /// Build the field into a row that slots into a column, with common
-      /// sizing/padding applied
-      fn build(self) -> Row<'elem, Message, cosmic::Theme> {
-        row![
-          cosmic::applet::padded_control(self.label.size(14).wrapping(Wrapping::None)),
-          widget::space::horizontal(),
-          cosmic::applet::padded_control(self.input).width(200)
-        ]
+    /// Wraps an element in a [Row] with common padding and alignment
+    fn elem_row(elem: Element<Message>) -> Row<Message, cosmic::Theme> {
+      Row::with_capacity(1)
         .align_y(Alignment::Center)
-      }
+        .push(cosmic::applet::padded_control(elem))
+    }
+
+    /// Wraps text in a [Row] with common padding and alignment. The text uses
+    /// the [body] preset.
+    ///
+    /// [body]: widget::text::body
+    fn text_row<'elem>(text: String) -> Row<'elem, Message, cosmic::Theme> {
+      elem_row(
+        widget::text::body(text)
+          .size(14)
+          .wrapping(Wrapping::None)
+          .into(),
+      )
     }
 
     let ctx = &self.core.applet;
     let Spacing { space_xxs, .. } = cosmic::theme::spacing();
 
     let set_max_width = Field {
-      label: widget::text::body(fl!("config-max-width")),
+      label: fl!("config-max-width"),
 
-      input: widget::slider(50..=1000, self.config.max_width, Message::UpdateMaxWidth)
-        .step(50u32)
-        .width(Length::Fill)
-        .into(),
+      input: self.max_width_slider.view(Message::UpdateMaxWidth),
     };
 
     let set_template = Field {
-      label: widget::text::body(fl!("config-template")),
+      label: fl!("config-template"),
 
       input: widget::text_input("template", &self.template_buf)
         .on_input(Message::UpdateTemplateBuffer)
@@ -310,9 +317,18 @@ impl cosmic::Application for AppModel {
         .into(),
     };
 
-    let content = column![set_max_width.build(), set_template.build()]
-      .align_x(Alignment::Start)
-      .padding([space_xxs, 0]);
+    let content = column![
+      // max width slider
+      text_row(set_max_width.label),
+      elem_row(set_max_width.input), // TODO: add numeric value input field
+      // horizontal rule
+      elem_row(widget::divider::horizontal::default().into()),
+      // template text input
+      text_row(set_template.label),
+      elem_row(set_template.input),
+    ]
+    .align_x(Alignment::Start)
+    .padding([space_xxs, 0]);
 
     ctx.popup_container(widget::container(content)).into()
   }
@@ -361,6 +377,7 @@ impl cosmic::Application for AppModel {
 
       Message::UpdateConfig(config) => {
         self.config = config;
+        self.track_slider_input();
         self.template_buf = self.config.template.clone().unwrap_or_default();
 
         self.template = self.config.template.as_deref().map_or_default(|it| {
@@ -370,14 +387,16 @@ impl cosmic::Application for AppModel {
         });
       }
 
-      Message::UpdateMaxWidth(w) => {
-        if let Some(handle) = &self.config_handle {
-          if let Err(why) = self.config.set_max_width(handle, w) {
+      Message::UpdateMaxWidth(msg) => {
+        if let Some(width) = self.max_width_slider.update(msg)
+          && let Some(handle) = &self.config_handle
+        {
+          if let Err(why) = self.config.set_max_width(handle, width) {
             tracing::error!(?why, "failed to write max width config to disk");
           }
-        }
-        else {
-          self.config.max_width = w;
+          else {
+            self.config.max_width = width;
+          }
         }
       }
 
@@ -480,5 +499,12 @@ impl cosmic::Application for AppModel {
 
   fn style(&self) -> Option<cosmic::iced::theme::Style> {
     Some(cosmic::applet::style())
+  }
+}
+
+impl AppModel {
+  /// Updates the stored value of [`Self::max_width_slider`]
+  fn track_slider_input(&mut self) {
+    self.max_width_slider = SliderInput::new(self.config.max_width, 50, 1000, 50);
   }
 }

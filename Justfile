@@ -80,6 +80,9 @@ install-release: build-release install
 uninstall:
   rm {{ bin-dst }} {{ desktop-dst }} {{ icon-dst }}
 
+view-logs:
+  journalctl -f SYSLOG_IDENTIFIER={{ name }}
+
 # Vendor dependencies locally
 vendor:
   mkdir -p .cargo
