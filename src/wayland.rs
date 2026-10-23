@@ -21,6 +21,7 @@ use cosmic::{
     wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1 as ToplevelHandle,
   },
   desktop::{
+    DesktopAction,
     DesktopEntryCache,
     DesktopEntryData,
     DesktopLookupContext,
@@ -58,6 +59,9 @@ pub struct ActiveWindow {
 
   /// The app icon
   pub icon_source: IconSource,
+
+  /// Launch actions, e.g. "open new window", "open private window"
+  pub actions: Vec<DesktopAction>,
 }
 
 impl PartialEq for ActiveWindow {
@@ -116,12 +120,14 @@ impl ToplevelInfoHandler for WindowData {
           data.name
         };
         let icon_source = data.icon;
+        let actions = data.desktop_actions;
 
         ActiveWindow {
           title,
           app_id,
           app_name,
           icon_source,
+          actions,
         }
       });
 

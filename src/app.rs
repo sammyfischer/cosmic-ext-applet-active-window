@@ -24,6 +24,7 @@ use cosmic::{
     column,
     layer_container,
     rectangle_tracker::{RectangleUpdate, rectangle_tracker_subscription},
+    row,
   },
 };
 
@@ -47,6 +48,9 @@ pub struct AppModel {
   /// The popup window id
   popup: Option<Id>,
 
+  /// The current page of the popup
+  page: Page,
+
   /// Configuration data that persists between application runs
   config: Config,
   config_handle: Option<cosmic_config::Config>,
@@ -67,6 +71,13 @@ pub struct AppModel {
   rectangle: Rectangle,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Page {
+  #[default]
+  Main,
+  Settings,
+}
+
 /// Messages emitted by the application and its widgets.
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -82,6 +93,9 @@ pub enum Message {
   /// The popup window was closed
   PopupClosed(Id),
 
+  /// Switch to the given page
+  SwitchPage(Page),
+
   /// The config was written to
   UpdateConfig(Config),
 
@@ -96,6 +110,11 @@ pub enum Message {
 
   /// The bounds of the applet changed
   Rectangle(RectangleUpdate<u32>),
+
+  /// A no-op message
+  ///
+  /// TODO: temporary
+  None,
 }
 
 /// Create a COSMIC application from the app model
@@ -271,66 +290,10 @@ impl cosmic::Application for AppModel {
   /// are multiple poups, you may match the id parameter to determine which
   /// popup to create a view for.
   fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
-    /// A field in the settings form. This is just a pair of the field's label
-    /// and input element.
-    struct Field<'elem> {
-      label: String,
-      input: Element<'elem, Message>,
+    match self.page {
+      Page::Main => self.popup_main_page(),
+      Page::Settings => self.popup_settings_page(),
     }
-
-    /// Wraps an element in a [Row] with common padding and alignment
-    fn elem_row(elem: Element<Message>) -> Row<Message, cosmic::Theme> {
-      Row::with_capacity(1)
-        .align_y(Alignment::Center)
-        .push(cosmic::applet::padded_control(elem))
-    }
-
-    /// Wraps text in a [Row] with common padding and alignment. The text uses
-    /// the [body] preset.
-    ///
-    /// [body]: widget::text::body
-    fn text_row<'elem>(text: String) -> Row<'elem, Message, cosmic::Theme> {
-      elem_row(
-        widget::text::body(text)
-          .size(14)
-          .wrapping(Wrapping::None)
-          .into(),
-      )
-    }
-
-    let ctx = &self.core.applet;
-    let Spacing { space_xxs, .. } = cosmic::theme::spacing();
-
-    let set_max_width = Field {
-      label: fl!("config-max-width"),
-
-      input: self.max_width_slider.view(Message::UpdateMaxWidth),
-    };
-
-    let set_template = Field {
-      label: fl!("config-template"),
-
-      input: widget::text_input("template", &self.template_buf)
-        .on_input(Message::UpdateTemplateBuffer)
-        .on_unfocus(Message::CommitTemplate)
-        .on_submit(|_| Message::CommitTemplate)
-        .into(),
-    };
-
-    let content = column![
-      // max width slider
-      text_row(set_max_width.label),
-      elem_row(set_max_width.input), // TODO: add numeric value input field
-      // horizontal rule
-      elem_row(widget::divider::horizontal::default().into()),
-      // template text input
-      text_row(set_template.label),
-      elem_row(set_template.input),
-    ]
-    .align_x(Alignment::Start)
-    .padding([space_xxs, 0]);
-
-    ctx.popup_container(widget::container(content)).into()
   }
 
   /// Register subscriptions for this application.
@@ -368,6 +331,8 @@ impl cosmic::Application for AppModel {
   #[allow(clippy::cast_possible_truncation)]
   fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
     match message {
+      Message::None => {}
+
       Message::ActiveWindow(active) => self.active = active,
 
       Message::TooltipSurface(action) => {
@@ -488,6 +453,8 @@ impl cosmic::Application for AppModel {
         }
       }
 
+      Message::SwitchPage(page) => self.page = page,
+
       Message::Rectangle(update) => match update {
         RectangleUpdate::Init(tracker) => self.rectangle_tracker = Some(tracker),
         RectangleUpdate::Rectangle((_, rect)) => self.rectangle = rect,
@@ -506,5 +473,164 @@ impl AppModel {
   /// Updates the stored value of [`Self::max_width_slider`]
   fn track_slider_input(&mut self) {
     self.max_width_slider = SliderInput::new(self.config.max_width, 50, 1000, 50);
+  }
+
+  /// Creates the view of the popup main page
+  fn popup_main_page(&self) -> Element<'_, Message> {
+    // from https://github.com/pop-os/cosmic-applets/blob/master/cosmic-app-list/src/app.rs#L2100
+
+    /// A menu item in the list that is entirely clickable
+    fn menu_item_button<'elem>(
+      content: impl Into<Element<'elem, Message>>,
+    ) -> widget::Button<'elem, Message> {
+      let Spacing {
+        space_s, space_xxs, ..
+      } = cosmic::theme::spacing();
+
+      widget::button::custom(content)
+        .height(20 + 2 * space_xxs)
+        .class(cosmic::theme::Button::MenuItem)
+        .padding([space_xxs, space_s])
+        .width(Length::Fill)
+    }
+
+    let Some(active) = self.active.as_ref()
+    else {
+      // this will most likely never be visible, but it's here to avoid ever
+      // having an empty popup
+      return widget::text("No active window").into();
+    };
+
+    let Spacing {
+      space_s, space_xxs, ..
+    } = cosmic::theme::spacing();
+    let ctx = &self.core.applet;
+    let mut content = widget::menu::menu_column::MenuColumn::new().align_x(Alignment::Center);
+
+    // the full title, since the tooltip is never visible while the popup is
+    let title = widget::text(&active.title).wrapping(Wrapping::WordOrGlyph);
+    content = content.push(
+      widget::container(title)
+        .padding([space_xxs, space_s])
+        .width(Length::Fill),
+    );
+
+    let actions = &active.actions;
+    if !actions.is_empty() {
+      content = content.push(widget::divider::horizontal::light());
+    }
+
+    for action in actions {
+      let name =
+        widget::text::body(&action.name).ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)));
+
+      let button = menu_item_button(name).on_press(Message::None);
+
+      content = content.push(button);
+    }
+
+    content = content.push(widget::divider::horizontal::light()).push(
+      menu_item_button(widget::text::body(fl!("settings-button")))
+        .on_press_down(Message::SwitchPage(Page::Settings)),
+    );
+
+    ctx.popup_container(content).into()
+  }
+
+  /// Creates the view of the popup settings page
+  fn popup_settings_page(&self) -> Element<'_, Message> {
+    /// A field in the settings form. This is just a pair of the field's label
+    /// and input element.
+    struct Field<'elem> {
+      label: String,
+      input: Element<'elem, Message>,
+    }
+
+    /// Wraps an element in a [Row] with common padding and alignment
+    fn elem_row(elem: Element<Message>) -> Row<Message, cosmic::Theme> {
+      Row::with_capacity(1)
+        .align_y(Alignment::Center)
+        .push(cosmic::applet::padded_control(elem))
+    }
+
+    /// Wraps text in a [Row] with common padding and alignment. The text uses
+    /// the [body] preset.
+    ///
+    /// [body]: widget::text::body
+    fn text_row<'elem>(text: String) -> Row<'elem, Message, cosmic::Theme> {
+      elem_row(
+        widget::text::body(text)
+          .size(14)
+          .wrapping(Wrapping::None)
+          .into(),
+      )
+    }
+
+    fn rule<'elem>() -> Element<'elem, Message> {
+      let Spacing { space_xxs, .. } = cosmic::theme::spacing();
+      widget::container(widget::divider::horizontal::light())
+        .padding(space_xxs)
+        .width(Length::Fill)
+        .into()
+    }
+
+    let ctx = &self.core.applet;
+    let Spacing { space_xxs, .. } = cosmic::theme::spacing();
+
+    let set_max_width = Field {
+      label: fl!("config-max-width"),
+
+      input: self.max_width_slider.view(Message::UpdateMaxWidth),
+    };
+
+    let set_template = Field {
+      label: fl!("config-template"),
+
+      input: widget::text_input("template", &self.template_buf)
+        .on_input(Message::UpdateTemplateBuffer)
+        .on_unfocus(Message::CommitTemplate)
+        .on_submit(|_| Message::CommitTemplate)
+        .into(),
+    };
+
+    #[allow(clippy::items_after_statements)]
+    const HEADER_TEXT_SIZE: u16 = 16;
+
+    #[allow(clippy::items_after_statements)]
+    const BUTTON_SIZE: f32 = 30.0;
+
+    let back_button = widget::button::custom(
+      widget::icon::from_name("go-previous-symbolic")
+        .size(HEADER_TEXT_SIZE)
+        .symbolic(true),
+    )
+    .class(cosmic::theme::Button::Icon)
+    .width(Length::Fixed(BUTTON_SIZE))
+    .height(Length::Fixed(BUTTON_SIZE))
+    .on_press_down(Message::SwitchPage(Page::Main));
+
+    let header = row![
+      back_button,
+      widget::text(fl!("settings-header")).size(HEADER_TEXT_SIZE),
+    ]
+    .spacing(space_xxs)
+    .align_y(Alignment::Center);
+
+    let content = column![
+      cosmic::applet::padded_control(header),
+      rule(),
+      // max width slider
+      text_row(set_max_width.label),
+      elem_row(set_max_width.input), // TODO: add numeric value input field
+      rule(),
+      // template text input
+      text_row(set_template.label),
+      elem_row(set_template.input),
+    ]
+    .spacing(space_xxs)
+    .align_x(Alignment::Start)
+    .padding([space_xxs, 0]);
+
+    ctx.popup_container(widget::container(content)).into()
   }
 }
