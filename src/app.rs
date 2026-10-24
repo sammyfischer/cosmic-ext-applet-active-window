@@ -20,11 +20,9 @@ use cosmic::{
   widget::{
     self,
     RectangleTracker,
-    Row,
     column,
     layer_container,
     rectangle_tracker::{RectangleUpdate, rectangle_tracker_subscription},
-    row,
   },
 };
 
@@ -87,14 +85,14 @@ pub enum Message {
   /// The full-title tooltip surfaced
   TooltipSurface(surface::Action<Message>),
 
-  /// The popup window was toggled
-  TogglePopup,
+  /// The main popup window was toggled
+  ToggleMainPopup,
+
+  /// The settings popup window was toggled
+  ToggleSettingsPopup,
 
   /// The popup window was closed
   PopupClosed(Id),
-
-  /// Switch to the given page
-  SwitchPage(Page),
 
   /// The config was written to
   UpdateConfig(Config),
@@ -268,7 +266,8 @@ impl cosmic::Application for AppModel {
     )
     .class(cosmic::theme::Button::AppletIcon)
     .padding([0, hpadding])
-    .on_press_down(Message::TogglePopup);
+    // left click to open main page
+    .on_press_down(Message::ToggleMainPopup);
 
     let tooltip = ctx.applet_tooltip(
       if let Some(tracker) = self.rectangle_tracker.as_ref() {
@@ -283,7 +282,10 @@ impl cosmic::Application for AppModel {
       None,
     );
 
-    ctx.autosize_window(tooltip).into()
+    // right click to open settings page
+    let mouse_area = widget::mouse_area(tooltip).on_right_release(Message::ToggleSettingsPopup);
+
+    ctx.autosize_window(mouse_area).into()
   }
 
   /// The applet's popup window will be drawn using this view method. If there
@@ -327,8 +329,6 @@ impl cosmic::Application for AppModel {
   /// Tasks may be returned for asynchronous execution of code in the background
   /// on the application's async runtime. The application will not exit until
   /// all tasks are finished.
-  #[allow(clippy::too_many_lines)]
-  #[allow(clippy::cast_possible_truncation)]
   fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
     match message {
       Message::None => {}
@@ -402,48 +402,23 @@ impl cosmic::Application for AppModel {
         self.template = parsed;
       }
 
-      Message::TogglePopup => {
+      Message::ToggleMainPopup => {
         return if let Some(p) = self.popup.take() {
           destroy_popup(p)
         }
         else {
-          // needs to be sent as a task for frosted glass blur to work
-          cosmic::surface::surface_task(cosmic::surface::action::app_popup(
-            |_| LiveSettings::default(),
-            |app: &mut Self| {
-              let new_id = Id::unique();
-              app.popup.replace(new_id);
+          self.page = Page::Main;
+          Self::build_popup()
+        };
+      }
 
-              let mut settings = app.core.applet.get_popup_settings(
-                app.core.main_window_id().unwrap(),
-                new_id,
-                None,
-                None,
-                None,
-              );
-
-              // from cosmic-applet-time
-              // the popup is designed for a single icon, and doesn't center
-              // properly for an applet that has a higher width
-              let Rectangle {
-                x,
-                y,
-                width,
-                height,
-              } = app.rectangle;
-
-              settings.positioner.anchor_rect = Rectangle::<i32> {
-                x: x.max(1.0) as i32,
-                y: y.max(1.0) as i32,
-                width: width.max(1.0) as i32,
-                height: height.max(1.0) as i32,
-              };
-              settings.positioner.size = None; // autosize
-
-              settings
-            },
-            None,
-          ))
+      Message::ToggleSettingsPopup => {
+        return if let Some(p) = self.popup.take() {
+          destroy_popup(p)
+        }
+        else {
+          self.page = Page::Settings;
+          Self::build_popup()
         };
       }
 
@@ -452,8 +427,6 @@ impl cosmic::Application for AppModel {
           self.popup = None;
         }
       }
-
-      Message::SwitchPage(page) => self.page = page,
 
       Message::Rectangle(update) => match update {
         RectangleUpdate::Init(tracker) => self.rectangle_tracker = Some(tracker),
@@ -529,11 +502,6 @@ impl AppModel {
       content = content.push(button);
     }
 
-    content = content.push(widget::divider::horizontal::light()).push(
-      menu_item_button(widget::text::body(fl!("settings-button")))
-        .on_press_down(Message::SwitchPage(Page::Settings)),
-    );
-
     ctx.popup_container(content).into()
   }
 
@@ -546,30 +514,13 @@ impl AppModel {
       input: Element<'elem, Message>,
     }
 
-    /// Wraps an element in a [Row] with common padding and alignment
-    fn elem_row(elem: Element<Message>) -> Row<Message, cosmic::Theme> {
-      Row::with_capacity(1)
-        .align_y(Alignment::Center)
-        .push(cosmic::applet::padded_control(elem))
-    }
+    fn row<'elem>(content: impl Into<Element<'elem, Message>>) -> Element<'elem, Message> {
+      let Spacing {
+        space_xxs, space_s, ..
+      } = cosmic::theme::spacing();
 
-    /// Wraps text in a [Row] with common padding and alignment. The text uses
-    /// the [body] preset.
-    ///
-    /// [body]: widget::text::body
-    fn text_row<'elem>(text: String) -> Row<'elem, Message, cosmic::Theme> {
-      elem_row(
-        widget::text::body(text)
-          .size(14)
-          .wrapping(Wrapping::None)
-          .into(),
-      )
-    }
-
-    fn rule<'elem>() -> Element<'elem, Message> {
-      let Spacing { space_xxs, .. } = cosmic::theme::spacing();
-      widget::container(widget::divider::horizontal::light())
-        .padding(space_xxs)
+      widget::container(content.into())
+        .padding([space_xxs, space_s])
         .width(Length::Fill)
         .into()
     }
@@ -593,44 +544,59 @@ impl AppModel {
         .into(),
     };
 
-    #[allow(clippy::items_after_statements)]
-    const HEADER_TEXT_SIZE: u16 = 16;
-
-    #[allow(clippy::items_after_statements)]
-    const BUTTON_SIZE: f32 = 30.0;
-
-    let back_button = widget::button::custom(
-      widget::icon::from_name("go-previous-symbolic")
-        .size(HEADER_TEXT_SIZE)
-        .symbolic(true),
-    )
-    .class(cosmic::theme::Button::Icon)
-    .width(Length::Fixed(BUTTON_SIZE))
-    .height(Length::Fixed(BUTTON_SIZE))
-    .on_press_down(Message::SwitchPage(Page::Main));
-
-    let header = row![
-      back_button,
-      widget::text(fl!("settings-header")).size(HEADER_TEXT_SIZE),
-    ]
-    .spacing(space_xxs)
-    .align_y(Alignment::Center);
-
     let content = column![
-      cosmic::applet::padded_control(header),
-      rule(),
       // max width slider
-      text_row(set_max_width.label),
-      elem_row(set_max_width.input), // TODO: add numeric value input field
-      rule(),
+      row(ctx.text(set_max_width.label)),
+      row(set_max_width.input),
       // template text input
-      text_row(set_template.label),
-      elem_row(set_template.input),
+      row(ctx.text(set_template.label)),
+      row(set_template.input),
     ]
-    .spacing(space_xxs)
     .align_x(Alignment::Start)
-    .padding([space_xxs, 0]);
+    .padding([/* vertical: */ space_xxs, 0]);
 
-    ctx.popup_container(widget::container(content)).into()
+    ctx.popup_container(content).into()
+  }
+
+  /// Build the popup window
+  #[allow(clippy::cast_possible_truncation)]
+  fn build_popup() -> cosmic::Task<cosmic::Action<Message>> {
+    // needs to be sent as a task for frosted glass blur to work
+    cosmic::surface::surface_task(cosmic::surface::action::app_popup(
+      |_| LiveSettings::default(),
+      |app: &mut Self| {
+        let new_id = Id::unique();
+        app.popup.replace(new_id);
+
+        let mut settings = app.core.applet.get_popup_settings(
+          app.core.main_window_id().unwrap(),
+          new_id,
+          None,
+          None,
+          None,
+        );
+
+        // from cosmic-applet-time
+        // the popup is designed for a single icon, and doesn't center
+        // properly for an applet that has a higher width
+        let Rectangle {
+          x,
+          y,
+          width,
+          height,
+        } = app.rectangle;
+
+        settings.positioner.anchor_rect = Rectangle::<i32> {
+          x: x.max(1.0) as i32,
+          y: y.max(1.0) as i32,
+          width: width.max(1.0) as i32,
+          height: height.max(1.0) as i32,
+        };
+        settings.positioner.size = None; // autosize
+
+        settings
+      },
+      None,
+    ))
   }
 }

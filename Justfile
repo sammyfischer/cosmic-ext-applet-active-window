@@ -17,7 +17,7 @@ desktop-dst := base-dir / 'share' / 'applications' / desktop
 icon-dst := base-dir / 'share' / 'icons' / 'hicolor' / '512x512' / 'apps' / appid + '.png'
 
 # Default recipe which runs `just build-release`
-default: build-release
+default: build
 
 # Runs `cargo clean`
 clean:
@@ -35,10 +35,10 @@ build-debug *args:
   cargo build {{ args }}
 
 # Compiles with release profile
-build-release *args: (build-debug '--release' args)
+build *args: (build-debug '--release' args)
 
 # Compiles release profile with vendored dependencies
-build-vendored *args: vendor-extract (build-release '--frozen --offline' args)
+build-vendored *args: vendor-extract (build '--frozen --offline' args)
 
 # Formats files with dprint
 fmt:
@@ -70,11 +70,9 @@ install:
   sudo install -Dm0644 {{ 'target' / 'xdgen' / 'app.metainfo.xml' }} {{ appdata-dst }}
   sudo install -Dm0644 resources/512x512.png {{ icon-dst }}
 
-# Builds in debug mode and installs
-install-dev: build-debug install
-
+alias bi := build-install
 # Builds in release mode and installs
-install-release: build-release install
+build-install: build install
 
 # Uninstalls installed files
 uninstall:
