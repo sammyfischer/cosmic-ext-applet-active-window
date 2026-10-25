@@ -3,6 +3,8 @@
 use std::rc::Rc;
 
 use cosmic::{
+  applet::token::subscription::{TokenRequest, TokenUpdate, activation_token_subscription},
+  cctk::sctk::reexports::calloop,
   cosmic_config::{self, CosmicConfigEntry},
   cosmic_theme::Spacing,
   desktop::IconSourceExt,
@@ -67,6 +69,18 @@ pub struct AppModel {
   rectangle_tracker: Option<RectangleTracker<u32>>,
   /// The applet's bounds
   rectangle: Rectangle,
+
+  /// A sender to send token requests
+  token_tx: Option<calloop::channel::Sender<TokenRequest>>,
+  /// A pending launch action that was requested but not executed
+  pending_launch: Option<DesktopLaunch>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DesktopLaunch {
+  app_id: String,
+  exec: String,
+  term: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -109,9 +123,13 @@ pub enum Message {
   /// The bounds of the applet changed
   Rectangle(RectangleUpdate<u32>),
 
+  /// A token update was sent
+  Token(TokenUpdate),
+
+  /// Launch a desktop action
+  Launch(DesktopLaunch),
+
   /// A no-op message
-  ///
-  /// TODO: temporary
   None,
 }
 
@@ -321,7 +339,10 @@ impl cosmic::Application for AppModel {
     let rectangle =
       rectangle_tracker_subscription(RECTANGLE_ID).map(|(_, update)| Message::Rectangle(update));
 
-    Subscription::batch(vec![active_window, config, rectangle])
+    // something to do with activating windows when they spawn
+    let token = activation_token_subscription(0).map(Message::Token);
+
+    Subscription::batch(vec![active_window, config, rectangle, token])
   }
 
   /// Handles messages emitted by the application and its widgets.
@@ -329,6 +350,7 @@ impl cosmic::Application for AppModel {
   /// Tasks may be returned for asynchronous execution of code in the background
   /// on the application's async runtime. The application will not exit until
   /// all tasks are finished.
+  #[allow(clippy::too_many_lines)]
   fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
     match message {
       Message::None => {}
@@ -432,6 +454,32 @@ impl cosmic::Application for AppModel {
         RectangleUpdate::Init(tracker) => self.rectangle_tracker = Some(tracker),
         RectangleUpdate::Rectangle((_, rect)) => self.rectangle = rect,
       },
+
+      Message::Token(update) => match update {
+        TokenUpdate::Init(sender) => self.token_tx = Some(sender),
+        TokenUpdate::Finished => self.token_tx = None,
+
+        TokenUpdate::ActivationToken { token, .. } => {
+          if let Some(launch) = self.pending_launch.take() {
+            return launch_action(launch, token);
+          }
+        }
+      },
+
+      Message::Launch(launch) => {
+        if let Some(tx) = self.token_tx.as_ref() {
+          let _ = tx.send(TokenRequest {
+            app_id: launch.app_id.clone(),
+            exec: launch.exec.clone(),
+          });
+          self.pending_launch = Some(launch);
+        }
+        else {
+          // just try anyway without a token (the launch will work, but it
+          // probably won't grab focus)
+          return launch_action(launch, None);
+        }
+      }
     }
 
     Task::none()
@@ -488,17 +536,40 @@ impl AppModel {
         .width(Length::Fill),
     );
 
-    let actions = &active.actions;
+    // default exec action (new window) + any custom ones chained together
+    let actions: Vec<(String, DesktopLaunch)> = active
+      .exec
+      .iter()
+      .map(|exec| {
+        (fl!("launch-new-window"), DesktopLaunch {
+          app_id: active.app_id.clone(),
+          exec: exec.clone(),
+          term: active.term,
+        })
+      })
+      .chain(active.actions.iter().filter_map(|action| {
+        // some apps specifically add a new window action, but most don't.
+        // use a custom one and ignore theirs
+        if action.name.eq_ignore_ascii_case("new window") {
+          None
+        }
+        else {
+          Some((action.name.clone(), DesktopLaunch {
+            app_id: active.app_id.clone(),
+            exec: action.exec.clone(),
+            term: active.term,
+          }))
+        }
+      }))
+      .collect();
+
     if !actions.is_empty() {
       content = content.push(widget::divider::horizontal::light());
     }
 
-    for action in actions {
-      let name =
-        widget::text::body(&action.name).ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)));
-
-      let button = menu_item_button(name).on_press(Message::None);
-
+    for (name, launch) in actions {
+      let name = widget::text::body(name).ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)));
+      let button = menu_item_button(name).on_press(Message::Launch(launch));
       content = content.push(button);
     }
 
@@ -599,4 +670,20 @@ impl AppModel {
       None,
     ))
   }
+}
+
+/// Launch a desktop action
+fn launch_action(launch: DesktopLaunch, token: Option<String>) -> Task<cosmic::Action<Message>> {
+  let mut env = Vec::new();
+
+  if let Some(token) = token {
+    env.push(("XDG_ACTIVATION_TOKEN".to_string(), token.clone()));
+    env.push(("DESKTOP_STARTUP_ID".to_string(), token));
+  }
+
+  cosmic::task::future(async move {
+    cosmic::desktop::spawn_desktop_exec(&launch.exec, env, Some(&launch.app_id), launch.term).await;
+    Message::None
+  })
+  .map(cosmic::Action::App)
 }

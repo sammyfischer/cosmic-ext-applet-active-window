@@ -12,10 +12,8 @@ use cosmic::{
   cctk::{
     self,
     cosmic_protocols::toplevel_info::v1::client::zcosmic_toplevel_handle_v1::State,
-    sctk::{
-      self,
-      registry::{ProvidesRegistryState, RegistryState},
-    },
+    sctk,
+    sctk::registry::{ProvidesRegistryState, RegistryState},
     toplevel_info::{ToplevelInfoHandler, ToplevelInfoState},
     wayland_client::{Connection, QueueHandle, globals::registry_queue_init},
     wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1 as ToplevelHandle,
@@ -39,10 +37,11 @@ use futures::{
 pub struct WindowData {
   exit: bool,
   tx: UnboundedSender<WaylandEvent>,
-  registry_state: RegistryState,
-  toplevel_state: ToplevelInfoState,
   desktop_cache: DesktopEntryCache,
   last_sent: Option<ActiveWindow>,
+
+  registry_state: RegistryState,
+  toplevel_state: ToplevelInfoState,
 }
 
 #[derive(Clone, Debug)]
@@ -57,10 +56,16 @@ pub struct ActiveWindow {
   /// The user-friendly app name, which doesn't need to be unique.
   pub app_name: String,
 
-  /// The app icon
+  /// The app icon.
   pub icon_source: IconSource,
 
-  /// Launch actions, e.g. "open new window", "open private window"
+  /// The command to start the app.
+  pub exec: Option<String>,
+
+  /// Whether this app runs in a terminal.
+  pub term: bool,
+
+  /// Launch actions, e.g. "open new window", "open private window".
   pub actions: Vec<DesktopAction>,
 }
 
@@ -72,7 +77,7 @@ impl PartialEq for ActiveWindow {
 
 #[derive(Clone, Debug)]
 pub enum WaylandEvent {
-  // currently only one event, might need more later
+  /// A window was activated
   Activate(Option<ActiveWindow>),
 }
 
@@ -120,6 +125,8 @@ impl ToplevelInfoHandler for WindowData {
           data.name
         };
         let icon_source = data.icon;
+        let exec = data.exec;
+        let term = data.terminal;
         let actions = data.desktop_actions;
 
         ActiveWindow {
@@ -127,6 +134,8 @@ impl ToplevelInfoHandler for WindowData {
           app_id,
           app_name,
           icon_source,
+          exec,
+          term,
           actions,
         }
       });
@@ -234,5 +243,5 @@ pub fn wayland_subscription() -> cosmic::iced::Subscription<WaylandEvent> {
   })
 }
 
-cctk::delegate_toplevel_info!(WindowData); // implements Dispatch for compatibility with ToplevelInfoState::new
-sctk::delegate_registry!(WindowData); // implements Dispatch for compatibility with registry_queue_init
+cctk::delegate_toplevel_info!(WindowData);
+sctk::delegate_registry!(WindowData);
