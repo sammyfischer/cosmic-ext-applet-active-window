@@ -215,6 +215,7 @@ impl cosmic::Application for AppModel {
   }
 
   fn on_close_requested(&self, id: Id) -> Option<Message> {
+    tracing::info!("close requested: {id}");
     Some(Message::PopupClosed(id))
   }
 
@@ -381,6 +382,7 @@ impl cosmic::Application for AppModel {
         if let Some(tx) = self.wayland_tx.as_ref() {
           let _ = tx.send(req);
         }
+        return self.close_popup();
       }
 
       Message::WindowActivated(active) => {
@@ -591,6 +593,8 @@ impl AppModel {
         .width(Length::Fill),
     );
 
+    content = content.push(widget::divider::horizontal::light());
+
     // callbacks to get button colors from theme
     let accent_color: TintFn = |theme| theme.cosmic().accent_color().into();
     let destructive_color: TintFn = |theme| theme.cosmic().destructive_color().into();
@@ -747,6 +751,13 @@ impl AppModel {
       },
       None,
     ))
+  }
+
+  fn close_popup(&mut self) -> Task<cosmic::Action<Message>> {
+    match self.popup.take() {
+      Some(id) => destroy_popup(id),
+      None => Task::none(),
+    }
   }
 }
 

@@ -396,11 +396,6 @@ impl WaylandState {
             // (display/monitor)
             mgr.set_fullscreen(ct, None);
           }
-
-          if let Some(seat) = self.seat_state.seats().next() {
-            // force-update the active window
-            mgr.activate(ct, &seat);
-          }
         }
       }
 
