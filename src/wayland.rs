@@ -1,5 +1,6 @@
 use std::{
   any::TypeId,
+  collections::HashSet,
   env,
   fmt::Display,
   os::{
@@ -64,12 +65,14 @@ pub struct WaylandState {
   seat_state: SeatState,
 }
 
-/// Used to check equality between window activations
+/// Used to check equality between window activations. If any field changes,
+/// that triggers refetching of info and redrawing the ui.
 #[derive(Debug, PartialEq)]
 struct WindowKey {
   id: String,
   app_id: String,
   title: String,
+  state: HashSet<State>,
 }
 
 impl From<&ToplevelInfo> for WindowKey {
@@ -78,6 +81,7 @@ impl From<&ToplevelInfo> for WindowKey {
       id: value.identifier.clone(),
       app_id: value.app_id.clone(),
       title: value.title.clone(),
+      state: value.state.clone(),
     }
   }
 }
@@ -191,6 +195,10 @@ impl WindowData {
     &self.info.foreign_toplevel
   }
 
+  pub fn is_minimized(&self) -> bool {
+    self.info.state.contains(&State::Minimized)
+  }
+
   pub fn is_maximized(&self) -> bool {
     self.info.state.contains(&State::Maximized)
   }
@@ -296,6 +304,7 @@ impl ToplevelInfoHandler for WaylandState {
     }
 
     tracing::info!(?active_key, "detected active window change");
+    self.last_sent = active_key;
     let active = active_info.map(|info| WindowData::new(info.to_owned(), &mut self.desktop_cache));
 
     if let Err(why) = self.tx.unbounded_send(WaylandEvent::Activate(active)) {
@@ -353,7 +362,12 @@ impl WaylandState {
         if let Some(info) = self.toplevel_info(&handle)
           && let Some(cosmic_toplevel) = info.cosmic_toplevel.as_ref()
         {
-          mgr.set_minimized(cosmic_toplevel);
+          if info.state.contains(&State::Minimized) {
+            mgr.unset_minimized(cosmic_toplevel);
+          }
+          else {
+            mgr.set_minimized(cosmic_toplevel);
+          }
         }
       }
 
@@ -381,6 +395,11 @@ impl WaylandState {
             // None tells the compositor to choose the output
             // (display/monitor)
             mgr.set_fullscreen(ct, None);
+          }
+
+          if let Some(seat) = self.seat_state.seats().next() {
+            // force-update the active window
+            mgr.activate(ct, &seat);
           }
         }
       }

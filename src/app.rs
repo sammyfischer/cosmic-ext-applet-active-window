@@ -21,15 +21,20 @@ use cosmic::{
   surface::{self, action::LiveSettings},
   widget::{
     self,
+    JustifyContent,
     RectangleTracker,
     column,
+    icon,
     layer_container,
     rectangle_tracker::{RectangleUpdate, rectangle_tracker_subscription},
   },
 };
 
 use crate::{
-  components::slider_input::{SliderInput, SliderInputMessage},
+  components::{
+    slider_input::{SliderInput, SliderInputMessage},
+    toggle_button::{TintFn, tinted_icon_class},
+  },
   config::Config,
   fl,
   template::TitleTemplate,
@@ -540,11 +545,36 @@ impl AppModel {
         .width(Length::Fill)
     }
 
+    /// Minimize, maximize, etc.
+    /// TODO: check capabilities of window, make `on_press` an option to disable
+    /// button if incapable
+    fn icon_button<'elem>(
+      icon: &'static str,
+      name: String,
+      tint: Option<TintFn>,
+      on_press: WaylandRequest,
+    ) -> Element<'elem, Message> {
+      const SIZE: u16 = 24;
+
+      let mut button = widget::button::icon(icon::from_name(icon).symbolic(true).size(SIZE))
+        .icon_size(SIZE)
+        .tooltip(name)
+        .on_press(Message::Request(on_press));
+
+      if let Some(tint) = tint {
+        button = button.class(tinted_icon_class(tint));
+      }
+
+      button.into()
+    }
+
     let Some(active) = self.active.as_ref()
     else {
       // this will most likely never be visible, but it's here to avoid ever
       // having an empty popup
-      return widget::text("No active window").into();
+      return cosmic::applet::padded_control(widget::text("No active window"))
+        .center_x(Length::Fill)
+        .into();
     };
 
     let Spacing {
@@ -561,33 +591,53 @@ impl AppModel {
         .width(Length::Fill),
     );
 
-    content = content
-      .push(widget::divider::horizontal::light())
-      .push(
-        menu_item_button(widget::text::body(fl!("minimize-window"))).on_press(Message::Request(
-          WaylandRequest::Minimize(active.foreign_toplevel().clone()),
-        )),
-      )
-      .push(
-        menu_item_button(widget::text::body(fl!("maximize-window"))).on_press(Message::Request(
-          WaylandRequest::Maximize(active.foreign_toplevel().clone()),
-        )),
-      )
-      .push(
-        menu_item_button(widget::text::body(fl!("fullscreen-window"))).on_press(Message::Request(
-          WaylandRequest::Fullscreen(active.foreign_toplevel().clone()),
-        )),
-      )
-      .push(
-        menu_item_button(widget::text::body(fl!("sticky-window"))).on_press(Message::Request(
-          WaylandRequest::Sticky(active.foreign_toplevel().clone()),
-        )),
-      )
-      .push(
-        menu_item_button(widget::text::body(fl!("close-window"))).on_press(Message::Request(
-          WaylandRequest::Close(active.foreign_toplevel().clone()),
-        )),
-      );
+    // callbacks to get button colors from theme
+    let accent_color: TintFn = |theme| theme.cosmic().accent_color().into();
+    let destructive_color: TintFn = |theme| theme.cosmic().destructive_color().into();
+
+    let controls = widget::flex_row(vec![
+      icon_button(
+        "window-minimize-symbolic",
+        fl!("minimize-window"),
+        active.is_minimized().then_some(accent_color),
+        WaylandRequest::Minimize(active.foreign_toplevel().clone()),
+      ),
+      icon_button(
+        "window-maximize-symbolic",
+        fl!("maximize-window"),
+        active.is_maximized().then_some(accent_color),
+        WaylandRequest::Maximize(active.foreign_toplevel().clone()),
+      ),
+      icon_button(
+        "view-fullscreen-symbolic",
+        fl!("fullscreen-window"),
+        active.is_fullscreen().then_some(accent_color),
+        WaylandRequest::Fullscreen(active.foreign_toplevel().clone()),
+      ),
+      icon_button(
+        "pin-symbolic",
+        fl!("sticky-window"),
+        active.is_sticky().then_some(accent_color),
+        WaylandRequest::Sticky(active.foreign_toplevel().clone()),
+      ),
+      icon_button(
+        "window-close-symbolic",
+        fl!("close-window"),
+        // impossible to be closed and active at the same time
+        Some(destructive_color),
+        WaylandRequest::Close(active.foreign_toplevel().clone()),
+      ),
+    ])
+    .width(Length::Fill)
+    .align_items(Alignment::Center)
+    .justify_items(Alignment::Center)
+    .justify_content(Some(JustifyContent::SpaceAround));
+
+    content = content.push(
+      widget::container(controls)
+        .padding([space_xxs, space_s])
+        .width(Length::Fill),
+    );
 
     let launchers = active.actions();
     if !launchers.is_empty() {

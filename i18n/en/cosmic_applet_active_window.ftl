@@ -1,10 +1,10 @@
 app-title = Active Window
 app-comment = Shows the active window text
-close-window = Close
 minimize-window = Minimize
 maximize-window = Maximize
-sticky-window = Sticky
 fullscreen-window = Fullscreen
+sticky-window = Pin
+close-window = Close
 launch-new-window = New Window
 config-max-width = Max title width (px)
 config-template = Title template
