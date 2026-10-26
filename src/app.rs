@@ -33,7 +33,7 @@ use crate::{
   config::Config,
   fl,
   template::TitleTemplate,
-  wayland::{ActiveWindow, WaylandEvent, wayland_subscription},
+  wayland::{WaylandEvent, WaylandRequest, WindowData, wayland_subscription},
 };
 
 const RECTANGLE_ID: u32 = 0;
@@ -63,7 +63,7 @@ pub struct AppModel {
   template_buf: String,
 
   /// The current active window
-  active: Option<ActiveWindow>,
+  active: Option<WindowData>,
 
   /// The tracker for the applet's bounds
   rectangle_tracker: Option<RectangleTracker<u32>>,
@@ -74,13 +74,18 @@ pub struct AppModel {
   token_tx: Option<calloop::channel::Sender<TokenRequest>>,
   /// A pending launch action that was requested but not executed
   pending_launch: Option<DesktopLaunch>,
+
+  /// A sender for wayland requests (e.g. close, minimize)
+  /// TODO: could combine token request handling into this
+  wayland_tx: Option<calloop::channel::Sender<WaylandRequest>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct DesktopLaunch {
-  app_id: String,
-  exec: String,
-  term: bool,
+  pub name: String,
+  pub app_id: String,
+  pub exec: String,
+  pub term: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -93,8 +98,18 @@ pub enum Page {
 /// Messages emitted by the application and its widgets.
 #[derive(Debug, Clone)]
 pub enum Message {
-  /// A window was activated
-  ActiveWindow(Option<ActiveWindow>),
+  /// A no-op message
+  None,
+
+  /// The wayland request channel was opened
+  InitRequestChannel(calloop::channel::Sender<WaylandRequest>),
+
+  /// Make a wayland request
+  Request(WaylandRequest),
+
+  /// A window was activated. The [`WindowData`] is boxed to reduce the size of
+  /// the enum.
+  WindowActivated(Box<Option<WindowData>>),
 
   /// The full-title tooltip surfaced
   TooltipSurface(surface::Action<Message>),
@@ -128,9 +143,6 @@ pub enum Message {
 
   /// Launch a desktop action
   Launch(DesktopLaunch),
-
-  /// A no-op message
-  None,
 }
 
 /// Create a COSMIC application from the app model
@@ -219,7 +231,7 @@ impl cosmic::Application for AppModel {
     // a lot of this code is adapted from
     // [cosmic::applet::Context::icon_button_from_handle] (specifically the size
     // calculations)
-    let icon_handle = active.icon_source.as_cosmic_icon();
+    let icon_handle = active.icon().as_cosmic_icon();
     let symbolic = icon_handle.symbolic;
 
     let Spacing { space_xxs, .. } = cosmic::theme::active().cosmic().spacing;
@@ -238,7 +250,7 @@ impl cosmic::Application for AppModel {
 
     let button_height = icon_width + 2 * vpadding;
 
-    let raw_text = self.template.replace(&active.app_name, &active.title);
+    let raw_text = self.template.replace(active.app_name(), active.title());
     let text = widget::container(
       ctx
         .text(raw_text.clone())
@@ -326,7 +338,8 @@ impl cosmic::Application for AppModel {
   fn subscription(&self) -> Subscription<Self::Message> {
     // listen for wayland toplevel events to track the currently active window
     let active_window = wayland_subscription().map(|event| match event {
-      WaylandEvent::Activate(title) => Message::ActiveWindow(title),
+      WaylandEvent::Init(tx) => Message::InitRequestChannel(tx),
+      WaylandEvent::Activate(window) => Message::WindowActivated(Box::new(window)),
     });
 
     // watch for config changes
@@ -355,7 +368,19 @@ impl cosmic::Application for AppModel {
     match message {
       Message::None => {}
 
-      Message::ActiveWindow(active) => self.active = active,
+      Message::InitRequestChannel(tx) => {
+        self.wayland_tx = Some(tx);
+      }
+
+      Message::Request(req) => {
+        if let Some(tx) = self.wayland_tx.as_ref() {
+          let _ = tx.send(req);
+        }
+      }
+
+      Message::WindowActivated(active) => {
+        self.active = *active;
+      }
 
       Message::TooltipSurface(action) => {
         // cosmic manages the tooltip action
@@ -529,48 +554,51 @@ impl AppModel {
     let mut content = widget::menu::menu_column::MenuColumn::new().align_x(Alignment::Center);
 
     // the full title, since the tooltip is never visible while the popup is
-    let title = widget::text(&active.title).wrapping(Wrapping::WordOrGlyph);
+    let title = widget::text(active.title()).wrapping(Wrapping::WordOrGlyph);
     content = content.push(
       widget::container(title)
         .padding([space_xxs, space_s])
         .width(Length::Fill),
     );
 
-    // default exec action (new window) + any custom ones chained together
-    let actions: Vec<(String, DesktopLaunch)> = active
-      .exec
-      .iter()
-      .map(|exec| {
-        (fl!("launch-new-window"), DesktopLaunch {
-          app_id: active.app_id.clone(),
-          exec: exec.clone(),
-          term: active.term,
-        })
-      })
-      .chain(active.actions.iter().filter_map(|action| {
-        // some apps specifically add a new window action, but most don't.
-        // use a custom one and ignore theirs
-        if action.name.eq_ignore_ascii_case("new window") {
-          None
-        }
-        else {
-          Some((action.name.clone(), DesktopLaunch {
-            app_id: active.app_id.clone(),
-            exec: action.exec.clone(),
-            term: active.term,
-          }))
-        }
-      }))
-      .collect();
+    content = content
+      .push(widget::divider::horizontal::light())
+      .push(
+        menu_item_button(widget::text::body(fl!("minimize-window"))).on_press(Message::Request(
+          WaylandRequest::Minimize(active.foreign_toplevel().clone()),
+        )),
+      )
+      .push(
+        menu_item_button(widget::text::body(fl!("maximize-window"))).on_press(Message::Request(
+          WaylandRequest::Maximize(active.foreign_toplevel().clone()),
+        )),
+      )
+      .push(
+        menu_item_button(widget::text::body(fl!("fullscreen-window"))).on_press(Message::Request(
+          WaylandRequest::Fullscreen(active.foreign_toplevel().clone()),
+        )),
+      )
+      .push(
+        menu_item_button(widget::text::body(fl!("sticky-window"))).on_press(Message::Request(
+          WaylandRequest::Sticky(active.foreign_toplevel().clone()),
+        )),
+      )
+      .push(
+        menu_item_button(widget::text::body(fl!("close-window"))).on_press(Message::Request(
+          WaylandRequest::Close(active.foreign_toplevel().clone()),
+        )),
+      );
 
-    if !actions.is_empty() {
+    let launchers = active.actions();
+    if !launchers.is_empty() {
       content = content.push(widget::divider::horizontal::light());
-    }
 
-    for (name, launch) in actions {
-      let name = widget::text::body(name).ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)));
-      let button = menu_item_button(name).on_press(Message::Launch(launch));
-      content = content.push(button);
+      for launch in launchers {
+        let name = widget::text::body(launch.name.clone())
+          .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)));
+        let button = menu_item_button(name).on_press(Message::Launch(launch.clone()));
+        content = content.push(button);
+      }
     }
 
     ctx.popup_container(content).into()
