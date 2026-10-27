@@ -1,17 +1,21 @@
 app-title = Active Window
 app-comment = Shows the active window text
-minimize-window = Minimize
-maximize-window = Maximize
-fullscreen-window = Fullscreen
-sticky-window = Pin
-close-window = Close
+
+minimize = Minimize
+maximize = Maximize
+restore = Restore
+fullscreen = Fullscreen
+pin = Pin
+unpin = Unpin
+close = Close
+
 launch-new-window = New Window
+
 config-max-width = Max title width (px)
 config-template = Title template
+
 app-keywords =
 about = About
 view = View
-welcome = Welcome to COSMIC! ✨
 page-id = Page {$num}
 git-description = Git commit {$hash} on {$date}
-example-row = Example Row

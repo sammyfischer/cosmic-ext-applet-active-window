@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
+#![allow(clippy::match_bool)]
+#![allow(clippy::too_many_lines)]
+
 mod app;
 mod components;
 mod config;

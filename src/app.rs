@@ -164,13 +164,9 @@ impl cosmic::Application for AppModel {
   /// Unique identifier in RDNN (reverse domain name notation) format.
   const APP_ID: &'static str = "com.github.sammyfischer.ActiveWindowApplet";
 
-  fn core(&self) -> &cosmic::Core {
-    &self.core
-  }
+  fn core(&self) -> &cosmic::Core { &self.core }
 
-  fn core_mut(&mut self) -> &mut cosmic::Core {
-    &mut self.core
-  }
+  fn core_mut(&mut self) -> &mut cosmic::Core { &mut self.core }
 
   /// Initializes the application with any given flags and startup commands.
   fn init(core: cosmic::Core, _flags: Self::Flags) -> (Self, Task<cosmic::Action<Self::Message>>) {
@@ -247,12 +243,7 @@ impl cosmic::Application for AppModel {
     let (main, cross) = ctx.suggested_padding(true);
 
     let is_horizontal = ctx.is_horizontal();
-    let (hpadding, vpadding) = if is_horizontal {
-      (main, cross)
-    }
-    else {
-      (cross, main)
-    };
+    let (hpadding, vpadding) = if is_horizontal { (main, cross) } else { (cross, main) };
 
     let button_height = icon_width + 2 * vpadding;
 
@@ -369,7 +360,6 @@ impl cosmic::Application for AppModel {
   /// Tasks may be returned for asynchronous execution of code in the background
   /// on the application's async runtime. The application will not exit until
   /// all tasks are finished.
-  #[allow(clippy::too_many_lines)]
   fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
     match message {
       Message::None => {}
@@ -517,9 +507,7 @@ impl cosmic::Application for AppModel {
     Task::none()
   }
 
-  fn style(&self) -> Option<cosmic::iced::theme::Style> {
-    Some(cosmic::applet::style())
-  }
+  fn style(&self) -> Option<cosmic::iced::theme::Style> { Some(cosmic::applet::style()) }
 }
 
 impl AppModel {
@@ -547,29 +535,6 @@ impl AppModel {
         .width(Length::Fill)
     }
 
-    /// Minimize, maximize, etc.
-    /// TODO: check capabilities of window, make `on_press` an option to disable
-    /// button if incapable
-    fn icon_button<'elem>(
-      icon: &'static str,
-      name: String,
-      tint: Option<TintFn>,
-      on_press: WaylandRequest,
-    ) -> Element<'elem, Message> {
-      const SIZE: u16 = 24;
-
-      let mut button = widget::button::icon(icon::from_name(icon).symbolic(true).size(SIZE))
-        .icon_size(SIZE)
-        .tooltip(name)
-        .on_press(Message::Request(on_press));
-
-      if let Some(tint) = tint {
-        button = button.class(tinted_icon_class(tint));
-      }
-
-      button.into()
-    }
-
     let Some(active) = self.active.as_ref()
     else {
       // this will most likely never be visible, but it's here to avoid ever
@@ -595,47 +560,11 @@ impl AppModel {
 
     content = content.push(widget::divider::horizontal::light());
 
-    // callbacks to get button colors from theme
-    let accent_color: TintFn = |theme| theme.cosmic().accent_color().into();
-    let destructive_color: TintFn = |theme| theme.cosmic().destructive_color().into();
-
-    let controls = widget::flex_row(vec![
-      icon_button(
-        "window-minimize-symbolic",
-        fl!("minimize-window"),
-        active.is_minimized().then_some(accent_color),
-        WaylandRequest::Minimize(active.foreign_toplevel().clone()),
-      ),
-      icon_button(
-        "window-maximize-symbolic",
-        fl!("maximize-window"),
-        active.is_maximized().then_some(accent_color),
-        WaylandRequest::Maximize(active.foreign_toplevel().clone()),
-      ),
-      icon_button(
-        "view-fullscreen-symbolic",
-        fl!("fullscreen-window"),
-        active.is_fullscreen().then_some(accent_color),
-        WaylandRequest::Fullscreen(active.foreign_toplevel().clone()),
-      ),
-      icon_button(
-        "pin-symbolic",
-        fl!("sticky-window"),
-        active.is_sticky().then_some(accent_color),
-        WaylandRequest::Sticky(active.foreign_toplevel().clone()),
-      ),
-      icon_button(
-        "window-close-symbolic",
-        fl!("close-window"),
-        // impossible to be closed and active at the same time
-        Some(destructive_color),
-        WaylandRequest::Close(active.foreign_toplevel().clone()),
-      ),
-    ])
-    .width(Length::Fill)
-    .align_items(Alignment::Center)
-    .justify_items(Alignment::Center)
-    .justify_content(Some(JustifyContent::SpaceAround));
+    let controls = widget::flex_row(window_control_buttons(active))
+      .width(Length::Fill)
+      .align_items(Alignment::Center)
+      .justify_items(Alignment::Center)
+      .justify_content(Some(JustifyContent::SpaceAround));
 
     content = content.push(
       widget::container(controls)
@@ -775,4 +704,94 @@ fn launch_action(launch: DesktopLaunch, token: Option<String>) -> Task<cosmic::A
     Message::None
   })
   .map(cosmic::Action::App)
+}
+
+/// Builds a list of window control buttons
+fn window_control_buttons<'elem>(active: &WindowData) -> Vec<Element<'elem, Message>> {
+  /// Common config for each button
+  ///
+  /// TODO: check capabilities of window, make `on_press` an option to disable
+  /// button if incapable. Store capabilities in [`WindowData`] to access here
+  /// easily.
+  fn icon_button<'elem>(
+    icon: &'static str,
+    name: String,
+    tint: Option<TintFn>,
+    on_press: WaylandRequest,
+  ) -> Element<'elem, Message> {
+    const SIZE: u16 = 24;
+
+    let mut button = widget::button::icon(icon::from_name(icon).symbolic(true).size(SIZE))
+      .icon_size(SIZE)
+      .tooltip(name)
+      .on_press(Message::Request(on_press));
+
+    if let Some(tint) = tint {
+      button = button.class(tinted_icon_class(tint));
+    }
+
+    button.into()
+  }
+
+  // callbacks to get button colors from theme
+  let accent_color: TintFn = |theme| theme.cosmic().accent_color().into();
+  let destructive_color: TintFn = |theme| theme.cosmic().destructive_color().into();
+
+  let min = icon_button(
+    "window-minimize-symbolic",
+    fl!("minimize"),
+    active.is_minimized().then_some(accent_color),
+    WaylandRequest::Minimize(active.foreign_toplevel().clone()),
+  );
+
+  let max = if active.is_maximized() {
+    icon_button(
+      "window-restore-symbolic",
+      fl!("restore"),
+      Some(accent_color),
+      WaylandRequest::Maximize(active.foreign_toplevel().clone()),
+    )
+  }
+  else {
+    icon_button(
+      "window-maximize-symbolic",
+      fl!("maximize"),
+      None,
+      WaylandRequest::Maximize(active.foreign_toplevel().clone()),
+    )
+  };
+
+  let full = icon_button(
+    "view-fullscreen-symbolic",
+    fl!("fullscreen"),
+    active.is_fullscreen().then_some(accent_color),
+    WaylandRequest::Fullscreen(active.foreign_toplevel().clone()),
+  );
+
+  let pin = if active.is_sticky() {
+    icon_button(
+      "pin-symbolic",
+      fl!("unpin"),
+      Some(accent_color),
+      WaylandRequest::Sticky(active.foreign_toplevel().clone()),
+    )
+  }
+  else {
+    icon_button(
+      "pin-symbolic",
+      fl!("pin"),
+      None,
+      WaylandRequest::Sticky(active.foreign_toplevel().clone()),
+    )
+  };
+
+  let close = icon_button(
+    "window-close-symbolic",
+    fl!("close"),
+    // impossible to be closed and active at the same time
+    Some(destructive_color),
+    WaylandRequest::Close(active.foreign_toplevel().clone()),
+  );
+
+  vec![min, max, full, pin, close]
 }

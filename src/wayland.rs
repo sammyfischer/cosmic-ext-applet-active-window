@@ -183,50 +183,32 @@ impl WindowData {
 
   /// The displayed title text of the window. This can be arbitrarily set by the
   /// application.
-  pub fn title(&self) -> &str {
-    &self.info.title
-  }
+  pub fn title(&self) -> &str { &self.info.title }
 
   /// Gets the foreign toplevel handle. Use this to make [requests] on the
   /// window.
   ///
   /// [requests]: WaylandRequest
-  pub fn foreign_toplevel(&self) -> &ToplevelHandle {
-    &self.info.foreign_toplevel
-  }
+  pub fn foreign_toplevel(&self) -> &ToplevelHandle { &self.info.foreign_toplevel }
 
-  pub fn is_minimized(&self) -> bool {
-    self.info.state.contains(&State::Minimized)
-  }
+  pub fn is_minimized(&self) -> bool { self.info.state.contains(&State::Minimized) }
 
-  pub fn is_maximized(&self) -> bool {
-    self.info.state.contains(&State::Maximized)
-  }
+  pub fn is_maximized(&self) -> bool { self.info.state.contains(&State::Maximized) }
 
-  pub fn is_fullscreen(&self) -> bool {
-    self.info.state.contains(&State::Fullscreen)
-  }
+  pub fn is_fullscreen(&self) -> bool { self.info.state.contains(&State::Fullscreen) }
 
-  pub fn is_sticky(&self) -> bool {
-    self.info.state.contains(&State::Sticky)
-  }
+  pub fn is_sticky(&self) -> bool { self.info.state.contains(&State::Sticky) }
 
   // DESKTOP STUFF
 
   /// The user-friendly app name, which may not be unique
-  pub fn app_name(&self) -> &str {
-    &self.app_name
-  }
+  pub fn app_name(&self) -> &str { &self.app_name }
 
   /// The app icon
-  pub fn icon(&self) -> &IconSource {
-    &self.desktop.icon
-  }
+  pub fn icon(&self) -> &IconSource { &self.desktop.icon }
 
   /// The list of desktop actions the app may have
-  pub fn actions(&self) -> &Vec<DesktopLaunch> {
-    &self.actions
-  }
+  pub fn actions(&self) -> &Vec<DesktopLaunch> { &self.actions }
 }
 
 impl Display for WindowData {
@@ -275,17 +257,13 @@ pub enum WaylandRequest {
 }
 
 impl ProvidesRegistryState for WaylandState {
-  fn registry(&mut self) -> &mut RegistryState {
-    &mut self.registry_state
-  }
+  fn registry(&mut self) -> &mut RegistryState { &mut self.registry_state }
 
   sctk::registry_handlers!();
 }
 
 impl ToplevelInfoHandler for WaylandState {
-  fn toplevel_info_state(&mut self) -> &mut ToplevelInfoState {
-    &mut self.toplevel_info_state
-  }
+  fn toplevel_info_state(&mut self) -> &mut ToplevelInfoState { &mut self.toplevel_info_state }
 
   fn new_toplevel(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &ToplevelHandle) {}
   fn update_toplevel(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &ToplevelHandle) {}
@@ -315,9 +293,7 @@ impl ToplevelInfoHandler for WaylandState {
 }
 
 impl ToplevelManagerHandler for WaylandState {
-  fn toplevel_manager_state(&mut self) -> &mut ToplevelManagerState {
-    &mut self.toplevel_mgr_state
-  }
+  fn toplevel_manager_state(&mut self) -> &mut ToplevelManagerState { &mut self.toplevel_mgr_state }
 
   fn capabilities(
     &mut self,
@@ -329,9 +305,7 @@ impl ToplevelManagerHandler for WaylandState {
 }
 
 impl SeatHandler for WaylandState {
-  fn seat_state(&mut self) -> &mut SeatState {
-    &mut self.seat_state
-  }
+  fn seat_state(&mut self) -> &mut SeatState { &mut self.seat_state }
 
   fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlSeat) {}
   fn new_capability(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlSeat, _: Capability) {}
