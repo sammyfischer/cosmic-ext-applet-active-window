@@ -250,7 +250,12 @@ impl cosmic::Application for AppModel {
 
     let button_height = icon_width + 2 * vpadding;
 
-    let raw_text = self.template.replace(active.app_name(), active.title());
+    #[allow(clippy::cast_possible_truncation)]
+    let raw_text = self.template.replace(
+      active.app_name(),
+      active.title(),
+      (active.siblings().len() + 1) as u32,
+    );
     let text = widget::container(
       ctx
         .text(raw_text.clone())

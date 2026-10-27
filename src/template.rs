@@ -3,6 +3,7 @@ enum Part {
   Literal(String),
   Name,
   Title,
+  Count,
 }
 
 /// An extremely simple templating engine that caches templates and only has the
@@ -72,6 +73,9 @@ impl TitleTemplate {
           else if trimmed.eq_ignore_ascii_case("title") {
             parts.push(Part::Title);
           }
+          else if trimmed.eq_ignore_ascii_case("count") {
+            parts.push(Part::Count);
+          }
           else {
             return Err(format!("unknown variable: '{var}'"));
           }
@@ -114,7 +118,7 @@ impl TitleTemplate {
   }
 
   /// Replace variables in the template with their real values
-  pub fn replace(&self, name: &str, title: &str) -> String {
+  pub fn replace(&self, name: &str, title: &str, count: u32) -> String {
     let mut out = String::new();
 
     for part in &self.0 {
@@ -122,6 +126,7 @@ impl TitleTemplate {
         Part::Literal(s) => out.push_str(s),
         Part::Name => out.push_str(name),
         Part::Title => out.push_str(title),
+        Part::Count => out.push_str(&count.to_string()),
       }
     }
 
@@ -142,7 +147,7 @@ impl Default for TitleTemplate {
 fn default() {
   let template = TitleTemplate::parse(DEFAULT_TEMPLATE).expect("The default template should parse");
   assert_eq!(
-    template.replace("Firefox", "crates.io: Rust Package Registry"),
+    template.replace("Firefox", "crates.io: Rust Package Registry", 1),
     "Firefox | crates.io: Rust Package Registry"
   );
 }
@@ -150,72 +155,104 @@ fn default() {
 #[test]
 fn basic() {
   assert_eq!(
-    TitleTemplate::parse("{title}")
-      .unwrap()
-      .replace("Firefox", "crates.io: Rust Package Registry"),
+    TitleTemplate::parse("{title}").unwrap().replace(
+      "Firefox",
+      "crates.io: Rust Package Registry",
+      1
+    ),
     "crates.io: Rust Package Registry"
   );
 
   assert_eq!(
-    TitleTemplate::parse("{title} | {name}")
-      .unwrap()
-      .replace("Firefox", "crates.io: Rust Package Registry"),
+    TitleTemplate::parse("{title} | {name}").unwrap().replace(
+      "Firefox",
+      "crates.io: Rust Package Registry",
+      1
+    ),
     "crates.io: Rust Package Registry | Firefox"
   );
 
   assert_eq!(
     TitleTemplate::parse("{name}{title}")
       .unwrap()
-      .replace("a", "b"),
+      .replace("a", "b", 1),
     "ab"
   );
 
   assert_eq!(
     TitleTemplate::parse("{name} {name}")
       .unwrap()
-      .replace("Firefox", "literally anything"),
+      .replace("Firefox", "literally anything", 1),
     "Firefox Firefox"
   );
 
   assert_eq!(
-    TitleTemplate::parse("[{name}] {title}")
-      .unwrap()
-      .replace("Firefox", "crates.io: Rust Package Registry"),
+    TitleTemplate::parse("[{name}] {title}").unwrap().replace(
+      "Firefox",
+      "crates.io: Rust Package Registry",
+      1
+    ),
     "[Firefox] crates.io: Rust Package Registry"
   );
 
   assert_eq!(
     TitleTemplate::parse("  {name}  {title}  ")
       .unwrap()
-      .replace("Firefox", "crates.io: Rust Package Registry"),
+      .replace("Firefox", "crates.io: Rust Package Registry", 1),
     "  Firefox  crates.io: Rust Package Registry  "
+  );
+
+  assert_eq!(
+    TitleTemplate::parse("{name} ({count}) | {title}")
+      .unwrap()
+      .replace("Firefox", "crates.io: Rust Package Registry", 3),
+    "Firefox (3) | crates.io: Rust Package Registry"
+  );
+
+  assert_eq!(
+    TitleTemplate::parse("{name} ({count}) | {title}")
+      .unwrap()
+      .replace("Files", "~/Documents", 1000),
+    "Files (1000) | ~/Documents"
   );
 }
 
 #[test]
 fn escapes() {
   assert_eq!(
-    TitleTemplate::parse("{{{name}}} {title}")
-      .unwrap()
-      .replace("Firefox", "crates.io: Rust Package Registry"),
+    TitleTemplate::parse("{{{name}}} {title}").unwrap().replace(
+      "Firefox",
+      "crates.io: Rust Package Registry",
+      1
+    ),
     "{Firefox} crates.io: Rust Package Registry"
   );
 
-  assert_eq!(TitleTemplate::parse("{{").unwrap().replace("A", "B"), "{");
-  assert_eq!(TitleTemplate::parse("}}").unwrap().replace("A", "B"), "}");
+  assert_eq!(
+    TitleTemplate::parse("{{").unwrap().replace("A", "B", 1),
+    "{"
+  );
+  assert_eq!(
+    TitleTemplate::parse("}}").unwrap().replace("A", "B", 1),
+    "}"
+  );
 
   assert_eq!(
-    TitleTemplate::parse("{{}}").unwrap().replace("A", "B"),
+    TitleTemplate::parse("{{}}").unwrap().replace("A", "B", 1),
     "{}"
   );
 
   assert_eq!(
-    TitleTemplate::parse("{{name}}").unwrap().replace("A", "B"),
+    TitleTemplate::parse("{{name}}")
+      .unwrap()
+      .replace("A", "B", 1),
     "{name}"
   );
 
   assert_eq!(
-    TitleTemplate::parse("{{{{}}}}").unwrap().replace("A", "B"),
+    TitleTemplate::parse("{{{{}}}}")
+      .unwrap()
+      .replace("A", "B", 1),
     "{{}}"
   );
 }
@@ -234,7 +271,7 @@ fn inner_whitespace() {
     assert_eq!(
       TitleTemplate::parse(template)
         .unwrap_or_else(|why| panic!("failed to parse test {i}: {why}"))
-        .replace("Firefox", "crates.io: Rust Package Registry"),
+        .replace("Firefox", "crates.io: Rust Package Registry", 1),
       "Firefox | crates.io: Rust Package Registry"
     );
   }
@@ -243,22 +280,28 @@ fn inner_whitespace() {
 #[test]
 fn empty() {
   assert_eq!(
-    TitleTemplate::parse("").unwrap().replace("App", "title"),
+    TitleTemplate::parse("").unwrap().replace("App", "title", 1),
     ""
   );
 
   assert_eq!(
-    TitleTemplate::parse("{name}").unwrap().replace("", "title"),
+    TitleTemplate::parse("{name}")
+      .unwrap()
+      .replace("", "title", 1),
     ""
   );
 
   assert_eq!(
-    TitleTemplate::parse("{title}").unwrap().replace("App", ""),
+    TitleTemplate::parse("{title}")
+      .unwrap()
+      .replace("App", "", 1),
     ""
   );
 
   assert_eq!(
-    TitleTemplate::parse("  ").unwrap().replace("App", "title"),
+    TitleTemplate::parse("  ")
+      .unwrap()
+      .replace("App", "title", 1),
     "  "
   );
 }
@@ -266,16 +309,20 @@ fn empty() {
 #[test]
 fn case_insensitive() {
   assert_eq!(
-    TitleTemplate::parse("{NAME} | {TITLE}")
-      .unwrap()
-      .replace("Firefox", "crates.io: Rust Package Registry"),
+    TitleTemplate::parse("{NAME} | {TITLE}").unwrap().replace(
+      "Firefox",
+      "crates.io: Rust Package Registry",
+      1
+    ),
     "Firefox | crates.io: Rust Package Registry"
   );
 
   assert_eq!(
-    TitleTemplate::parse("{Name} | {titlE}")
-      .unwrap()
-      .replace("Firefox", "crates.io: Rust Package Registry"),
+    TitleTemplate::parse("{Name} | {titlE}").unwrap().replace(
+      "Firefox",
+      "crates.io: Rust Package Registry",
+      1
+    ),
     "Firefox | crates.io: Rust Package Registry"
   );
 }
