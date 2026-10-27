@@ -65,23 +65,32 @@ pub struct WaylandState {
   seat_state: SeatState,
 }
 
-/// Used to check equality between window activations. If any field changes,
-/// that triggers refetching of info and redrawing the ui.
 #[derive(Debug, PartialEq)]
-struct WindowKey {
+struct ActiveKey {
   id: String,
   app_id: String,
   title: String,
   state: HashSet<State>,
 }
 
-impl From<&ToplevelInfo> for WindowKey {
-  fn from(value: &ToplevelInfo) -> Self {
+/// Used to check equality between window activations. If any field changes,
+/// that triggers refetching of info and redrawing the ui.
+#[derive(Debug, PartialEq)]
+struct WindowKey {
+  active: ActiveKey,
+  siblings: Vec<SiblingWindowData>,
+}
+
+impl WindowKey {
+  pub fn new(info: &ToplevelInfo, siblings: Vec<SiblingWindowData>) -> Self {
     Self {
-      id: value.identifier.clone(),
-      app_id: value.app_id.clone(),
-      title: value.title.clone(),
-      state: value.state.clone(),
+      active: ActiveKey {
+        id: info.identifier.clone(),
+        app_id: info.app_id.clone(),
+        title: info.title.clone(),
+        state: info.state.clone(),
+      },
+      siblings,
     }
   }
 }
@@ -104,13 +113,21 @@ pub struct WindowData {
   // upon construction to fallback to the app id
   app_name: String,
 
+  // list of other windows of the same app
+  // TODO: recalc siblings when any window is minimized
+  siblings: Vec<SiblingWindowData>,
+
   // stored separately bc we add a custom new-window action *only if* one isn't already defined. we
-  // need the [DesktopEntry] to determine that.
+  // need the [DesktopEntry] to determine that
   actions: Vec<DesktopLaunch>,
 }
 
 impl WindowData {
-  pub fn new(info: ToplevelInfo, cache: &mut DesktopEntryCache) -> Self {
+  pub fn new(
+    info: ToplevelInfo,
+    siblings: Vec<SiblingWindowData>,
+    cache: &mut DesktopEntryCache,
+  ) -> Self {
     let app_id = info.app_id.as_str();
 
     let ctx = DesktopLookupContext::new(info.app_id.as_str())
@@ -175,6 +192,7 @@ impl WindowData {
       info,
       desktop: data,
       app_name,
+      siblings,
       actions,
     }
   }
@@ -185,6 +203,10 @@ impl WindowData {
   /// application.
   pub fn title(&self) -> &str { &self.info.title }
 
+  /// The list of other windows of the same app, not including this window.
+  pub fn siblings(&self) -> &Vec<SiblingWindowData> { &self.siblings }
+  pub fn set_siblings(&mut self, siblings: Vec<SiblingWindowData>) { self.siblings = siblings; }
+
   /// Gets the foreign toplevel handle. Use this to make [requests] on the
   /// window.
   ///
@@ -192,11 +214,8 @@ impl WindowData {
   pub fn foreign_toplevel(&self) -> &ToplevelHandle { &self.info.foreign_toplevel }
 
   pub fn is_minimized(&self) -> bool { self.info.state.contains(&State::Minimized) }
-
   pub fn is_maximized(&self) -> bool { self.info.state.contains(&State::Maximized) }
-
   pub fn is_fullscreen(&self) -> bool { self.info.state.contains(&State::Fullscreen) }
-
   pub fn is_sticky(&self) -> bool { self.info.state.contains(&State::Sticky) }
 
   // DESKTOP STUFF
@@ -222,6 +241,39 @@ impl Display for WindowData {
   }
 }
 
+/// Minimum amount of window data needed to activate a sibling window and
+/// display the activation buttons.
+#[derive(Clone, Debug)]
+pub struct SiblingWindowData {
+  // store id for equality comparison
+  id: String,
+  title: String,
+  is_minimized: bool,
+  foreign_toplevel: ToplevelHandle,
+}
+
+impl SiblingWindowData {
+  pub fn new(info: &ToplevelInfo) -> Self {
+    Self {
+      id: info.identifier.clone(),
+      title: info.title.clone(),
+      is_minimized: info.state.contains(&State::Minimized),
+      foreign_toplevel: info.foreign_toplevel.clone(),
+    }
+  }
+
+  pub fn title(&self) -> &str { &self.title }
+  pub fn is_minimized(&self) -> bool { self.is_minimized }
+  pub fn foreign_toplevel(&self) -> &ToplevelHandle { &self.foreign_toplevel }
+}
+
+impl PartialEq for SiblingWindowData {
+  fn eq(&self, other: &Self) -> bool {
+    // don't compare the entire foreign toplevel handle
+    self.id == other.id && self.title == other.title && self.is_minimized == other.is_minimized
+  }
+}
+
 // [WindowData] significantly increases the size of the enum compared to the
 // Init variant. However, it's by far the most common event that will be sent,
 // so it's not necessary to box it.
@@ -232,7 +284,10 @@ pub enum WaylandEvent {
   Init(calloop::channel::Sender<WaylandRequest>),
 
   /// A window was activated
-  Activate(Option<WindowData>),
+  Activated(Option<WindowData>),
+
+  /// The activated window is unchanged, but its list of siblings changed
+  SiblingsChanged(Vec<SiblingWindowData>),
 }
 
 #[derive(Clone, Debug)]
@@ -254,6 +309,9 @@ pub enum WaylandRequest {
 
   /// Toggles sticky state of a window
   Sticky(ToplevelHandle),
+
+  /// Grabs window focus
+  Activate(ToplevelHandle),
 }
 
 impl ProvidesRegistryState for WaylandState {
@@ -275,19 +333,52 @@ impl ToplevelInfoHandler for WaylandState {
       .toplevels()
       .find(|info| info.state.contains(&State::Activated));
 
+    let siblings: Vec<_> = self
+      .toplevel_info_state
+      .toplevels()
+      .filter_map(|info| {
+        if active_info.is_some_and(|it| info.app_id == it.app_id)
+          && !info.state.contains(&State::Activated)
+        {
+          Some(SiblingWindowData::new(info))
+        }
+        else {
+          None
+        }
+      })
+      .collect();
+
     // check equality based on key first, resolve desktop info later
-    let active_key = active_info.map(WindowKey::from);
-    if active_key == self.last_sent {
+    let new_key = active_info.map(|info| WindowKey::new(info, siblings.clone()));
+    if new_key == self.last_sent {
       return;
     }
 
-    tracing::info!(?active_key, "detected active window change");
-    self.last_sent = active_key;
-    let active = active_info.map(|info| WindowData::new(info.to_owned(), &mut self.desktop_cache));
+    match (new_key.as_ref(), self.last_sent.as_ref()) {
+      // no change
+      (None, None) => {}
 
-    if let Err(why) = self.tx.unbounded_send(WaylandEvent::Activate(active)) {
-      tracing::error!(?why, "failed to send window activation event");
-      self.exit = true;
+      // both exist, and the active window's data is unchanged
+      (Some(new), Some(old)) if new.active == old.active => {
+        // sibling data is unchanged => whole key is unchanged, no update
+        if new.siblings == old.siblings {
+          return;
+        }
+        // sibling data is changed => just update siblings
+        tracing::info!(?new_key, "detected sibling window change");
+        self.last_sent = new_key;
+        self.send_event(WaylandEvent::SiblingsChanged(siblings));
+      }
+
+      // full update
+      _ => {
+        tracing::info!(?new_key, "detected active window change");
+        self.last_sent = new_key;
+        let active = active_info
+          .map(|info| WindowData::new(info.to_owned(), siblings, &mut self.desktop_cache));
+
+        self.send_event(WaylandEvent::Activated(active));
+      }
     }
   }
 }
@@ -315,11 +406,21 @@ impl SeatHandler for WaylandState {
 }
 
 impl WaylandState {
-  /// Converts a wayland toplevel handle into a cosmic toplevel handle
+  /// Sends a wayland event. If the channel is closed, traces the error and sets
+  /// the exit flag.
+  fn send_event(&mut self, event: WaylandEvent) {
+    if let Err(why) = self.tx.unbounded_send(event) {
+      tracing::error!(%why, "failed to send wayland event");
+      self.exit = true;
+    }
+  }
+
+  /// Converts a wayland (foreign) toplevel handle into a cosmic toplevel handle
   fn toplevel_info(&self, handle: &ToplevelHandle) -> Option<&ToplevelInfo> {
     self.toplevel_info_state.info(handle)
   }
 
+  /// Handles an incoming wayland request (e.g. close window, minimize)
   fn handle_request(&mut self, req: WaylandRequest) {
     let mgr = &self.toplevel_mgr_state.manager;
 
@@ -383,6 +484,15 @@ impl WaylandState {
           else {
             mgr.set_sticky(ct);
           }
+        }
+      }
+
+      WaylandRequest::Activate(handle) => {
+        if let Some(info) = self.toplevel_info(&handle)
+          && let Some(ct) = info.cosmic_toplevel.as_ref()
+          && let Some(seat) = self.seat_state.seats().next()
+        {
+          mgr.activate(ct, &seat);
         }
       }
     }

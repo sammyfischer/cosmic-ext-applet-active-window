@@ -10,6 +10,7 @@ use cosmic::{
   desktop::IconSourceExt,
   iced::{
     Alignment,
+    Color,
     Length,
     Rectangle,
     Subscription,
@@ -38,7 +39,7 @@ use crate::{
   config::Config,
   fl,
   template::TitleTemplate,
-  wayland::{WaylandEvent, WaylandRequest, WindowData, wayland_subscription},
+  wayland::{SiblingWindowData, WaylandEvent, WaylandRequest, WindowData, wayland_subscription},
 };
 
 const RECTANGLE_ID: u32 = 0;
@@ -115,6 +116,8 @@ pub enum Message {
   /// A window was activated. The [`WindowData`] is boxed to reduce the size of
   /// the enum.
   WindowActivated(Box<Option<WindowData>>),
+  /// The siblings of the active window changed, but the window itself did not.
+  SiblingsChanged(Vec<SiblingWindowData>),
 
   /// The full-title tooltip surfaced
   TooltipSurface(surface::Action<Message>),
@@ -336,7 +339,8 @@ impl cosmic::Application for AppModel {
     // listen for wayland toplevel events to track the currently active window
     let active_window = wayland_subscription().map(|event| match event {
       WaylandEvent::Init(tx) => Message::InitRequestChannel(tx),
-      WaylandEvent::Activate(window) => Message::WindowActivated(Box::new(window)),
+      WaylandEvent::Activated(window) => Message::WindowActivated(Box::new(window)),
+      WaylandEvent::SiblingsChanged(siblings) => Message::SiblingsChanged(siblings),
     });
 
     // watch for config changes
@@ -377,6 +381,12 @@ impl cosmic::Application for AppModel {
 
       Message::WindowActivated(active) => {
         self.active = *active;
+      }
+
+      Message::SiblingsChanged(siblings) => {
+        if let Some(active) = self.active.as_mut() {
+          active.set_siblings(siblings);
+        }
       }
 
       Message::TooltipSurface(action) => {
@@ -580,6 +590,44 @@ impl AppModel {
         let name = widget::text::body(launch.name.clone())
           .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)));
         let button = menu_item_button(name).on_press(Message::Launch(launch.clone()));
+        content = content.push(button);
+      }
+    }
+
+    let siblings = active.siblings();
+    if !siblings.is_empty() {
+      content = content.push(widget::divider::horizontal::light());
+
+      for window in siblings {
+        let mut name = widget::text::body(window.title())
+          .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+          .width(Length::Fill);
+
+        if window.is_minimized() {
+          let color: Color = cosmic::theme::active().cosmic().on_bg_color().into();
+          name = name.class(cosmic::theme::Text::Color(Color {
+            a: color.a * 0.6,
+            ..color
+          }));
+        }
+
+        let mut row = widget::Row::new()
+          .push(name)
+          .spacing(space_xxs)
+          .align_y(Alignment::Center);
+
+        if window.is_minimized() {
+          row = row.push(
+            icon::from_name("window-minimize-symbolic")
+              .size(16)
+              .symbolic(true),
+          );
+        }
+
+        let button = menu_item_button(row).on_press(Message::Request(WaylandRequest::Activate(
+          window.foreign_toplevel().clone(),
+        )));
+
         content = content.push(button);
       }
     }
