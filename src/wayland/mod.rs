@@ -15,11 +15,13 @@ use cosmic::{
       toplevel_info::v1::client::zcosmic_toplevel_handle_v1::State,
       toplevel_management::v1::client::zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1 as ToplevelManagementCapabilities,
     },
+    screencopy::ScreencopyState,
     sctk::{
       self,
       reexports::{calloop, calloop_wayland_source::WaylandSource},
       registry::{ProvidesRegistryState, RegistryState},
       seat::{Capability, SeatHandler, SeatState},
+      shm::Shm,
     },
     toplevel_info::{ToplevelInfo, ToplevelInfoHandler, ToplevelInfoState},
     toplevel_management::{ToplevelManagerHandler, ToplevelManagerState},
@@ -32,10 +34,7 @@ use cosmic::{
     },
     wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1 as ToplevelHandle,
   },
-  desktop::{
-    DesktopEntryCache,
-    fde::{self},
-  },
+  desktop::{DesktopEntryCache, fde},
   iced::Subscription,
 };
 use futures::{
@@ -45,19 +44,25 @@ use futures::{
 };
 pub use window::*;
 
+mod screencopy;
 mod window;
 
-/// Stores shared state of wayland handling
+/// Stores shared state of wayland handler
 pub struct WaylandState {
-  exit: bool,
+  last_sent: Option<String>,
   tx: UnboundedSender<WaylandEvent>,
+  exit: bool,
+
+  connection: Connection,
+  queue_handle: QueueHandle<Self>,
   desktop_cache: DesktopEntryCache,
-  last_sent: Option<WindowKey>,
 
   registry_state: RegistryState,
   toplevel_info_state: ToplevelInfoState,
   toplevel_mgr_state: ToplevelManagerState,
   seat_state: SeatState,
+  screencopy_state: ScreencopyState,
+  shm_state: Shm,
 }
 
 sctk::delegate_registry!(WaylandState);
@@ -74,11 +79,10 @@ pub enum WaylandEvent {
   /// Initialize the channel to send wayland requests
   Init(calloop::channel::Sender<WaylandRequest>),
 
-  /// A window was activated
-  Activated(Option<WindowData>),
+  AppUpdate(Option<ActiveApp>),
+  WindowUpdate(Vec<ToplevelInfo>),
 
-  /// The activated window is unchanged, but its list of siblings changed
-  SiblingsChanged(Vec<SiblingWindowData>),
+  Image(ToplevelInfo, image::RgbaImage),
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +107,9 @@ pub enum WaylandRequest {
 
   /// Grabs window focus
   Activate(ToplevelHandle),
+
+  /// Get a thumbnail image of the window
+  Screencopy(ToplevelHandle),
 }
 
 impl ProvidesRegistryState for WaylandState {
@@ -119,58 +126,30 @@ impl ToplevelInfoHandler for WaylandState {
   fn toplevel_closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &ToplevelHandle) {}
 
   fn info_done(&mut self, _: &Connection, _: &QueueHandle<Self>) {
-    let active_info = self
+    // if app changed, recalc entire thing, send new ActiveApp to ui
+    //
+    // if same app, send updates to window list
+    // just send the entire list tbh
+
+    let active = self
       .toplevel_info_state
       .toplevels()
       .find(|info| info.state.contains(&State::Activated));
 
-    let siblings: Vec<_> = self
-      .toplevel_info_state
-      .toplevels()
-      .filter_map(|info| {
-        if active_info.is_some_and(|it| info.app_id == it.app_id)
-          && !info.state.contains(&State::Activated)
-        {
-          Some(SiblingWindowData::new(info))
-        }
-        else {
-          None
-        }
-      })
-      .collect();
+    let appid = active.map(|info| info.app_id.as_str());
+    if appid != self.last_sent.as_deref() {
+      // active app changed, recalc everything
+      let toplevels: Vec<_> = self.toplevel_info_state.toplevels().collect();
+      let active = ActiveApp::new(&toplevels, &mut self.desktop_cache);
 
-    // check equality based on key first, resolve desktop info later
-    let new_key = active_info.map(|info| WindowKey::new(info, siblings.clone()));
-    if new_key == self.last_sent {
+      self.last_sent = appid.map(ToString::to_string);
+      self.send_event(WaylandEvent::AppUpdate(active));
       return;
     }
 
-    match (new_key.as_ref(), self.last_sent.as_ref()) {
-      // no change
-      (None, None) => {}
-
-      // both exist, and the active window's data is unchanged
-      (Some(new), Some(old)) if new.active == old.active => {
-        // sibling data is unchanged => whole key is unchanged, no update
-        if new.siblings == old.siblings {
-          return;
-        }
-        // sibling data is changed => just update siblings
-        tracing::info!(?new_key, "detected sibling window change");
-        self.last_sent = new_key;
-        self.send_event(WaylandEvent::SiblingsChanged(siblings));
-      }
-
-      // full update
-      _ => {
-        tracing::info!(?new_key, "detected active window change");
-        self.last_sent = new_key;
-        let active = active_info
-          .map(|info| WindowData::new(info.to_owned(), siblings, &mut self.desktop_cache));
-
-        self.send_event(WaylandEvent::Activated(active));
-      }
-    }
+    // send new set of windows
+    let toplevels: Vec<_> = self.toplevel_info_state.toplevels().cloned().collect();
+    self.send_event(WaylandEvent::WindowUpdate(toplevels));
   }
 }
 
@@ -286,6 +265,12 @@ impl WaylandState {
           mgr.activate(cosmic_toplevel, &seat);
         }
       }
+
+      WaylandRequest::Screencopy(foreign_toplevel) => {
+        if let Some(info) = self.toplevel_info(&foreign_toplevel) {
+          self.send_image(info.clone());
+        }
+      }
     }
   }
 }
@@ -302,7 +287,7 @@ pub fn wayland_handler(
       .map(|fd| unsafe { UnixStream::from_raw_fd(fd) })
   });
 
-  let conn = if let Some(socket) = socket {
+  let connection = if let Some(socket) = socket {
     Connection::from_socket(socket)
   }
   else {
@@ -311,7 +296,7 @@ pub fn wayland_handler(
   .context("failed to initialize wayland connection")?;
 
   let (global_list, event_queue) =
-    registry_queue_init(&conn).context("failed to initialize registry queue")?;
+    registry_queue_init(&connection).context("failed to initialize registry queue")?;
   let queue_handle = event_queue.handle();
 
   let mut event_loop =
@@ -323,7 +308,7 @@ pub fn wayland_handler(
   // this links the old implementation, which was simply listening on the
   // event queue for toplevel activations. we now need to combine that into a
   // common event loop which also handles the new requests
-  WaylandSource::new(conn.clone(), event_queue)
+  WaylandSource::new(connection.clone(), event_queue)
     .insert(loop_handle.clone())
     .context("failed to add wayland source to event loop")?;
 
@@ -341,16 +326,24 @@ pub fn wayland_handler(
   let toplevel_info_state = ToplevelInfoState::new(&registry_state, &queue_handle);
   let toplevel_mgr_state = ToplevelManagerState::new(&registry_state, &queue_handle);
   let seat_state = SeatState::new(&global_list, &queue_handle);
+  let screencopy_state = ScreencopyState::new(&global_list, &queue_handle);
+  let shm_state = Shm::bind(&global_list, &queue_handle)?;
 
   let mut state = WaylandState {
-    exit: false,
-    tx,
-    desktop_cache,
     last_sent: None,
+    tx,
+    exit: false,
+
+    connection,
+    queue_handle,
+    desktop_cache,
+
     registry_state,
     toplevel_info_state,
     toplevel_mgr_state,
     seat_state,
+    screencopy_state,
+    shm_state,
   };
 
   tracing::info!("wayland handler spawned");

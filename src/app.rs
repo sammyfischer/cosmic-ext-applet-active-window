@@ -4,12 +4,13 @@ use std::rc::Rc;
 
 use cosmic::{
   applet::token::subscription::{TokenRequest, TokenUpdate, activation_token_subscription},
-  cctk::sctk::reexports::calloop,
+  cctk::{sctk::reexports::calloop, toplevel_info::ToplevelInfo},
   cosmic_config::{self, CosmicConfigEntry},
   cosmic_theme::Spacing,
   desktop::IconSourceExt,
   iced::{
     Alignment,
+    Border,
     Color,
     Length,
     Rectangle,
@@ -26,6 +27,7 @@ use cosmic::{
     RectangleTracker,
     column,
     icon,
+    image::Handle,
     layer_container,
     rectangle_tracker::{RectangleUpdate, rectangle_tracker_subscription},
   },
@@ -39,7 +41,7 @@ use crate::{
   config::Config,
   fl,
   template::TitleTemplate,
-  wayland::{SiblingWindowData, WaylandEvent, WaylandRequest, WindowData, wayland_subscription},
+  wayland::{ActiveApp, WaylandEvent, WaylandRequest, Window, wayland_subscription},
 };
 
 const RECTANGLE_ID: u32 = 0;
@@ -68,8 +70,8 @@ pub struct AppModel {
   /// Buffer for the template text input field
   template_buf: String,
 
-  /// The current active window
-  active: Option<WindowData>,
+  /// The current active app
+  active: Option<ActiveApp>,
 
   /// The tracker for the applet's bounds
   rectangle_tracker: Option<RectangleTracker<u32>>,
@@ -113,11 +115,11 @@ pub enum Message {
   /// Make a wayland request
   Request(WaylandRequest),
 
-  /// A window was activated. The [`WindowData`] is boxed to reduce the size of
-  /// the enum.
-  WindowActivated(Box<Option<WindowData>>),
-  /// The siblings of the active window changed, but the window itself did not.
-  SiblingsChanged(Vec<SiblingWindowData>),
+  AppActivated(Option<ActiveApp>),
+  WindowsUpdated(Vec<ToplevelInfo>),
+
+  /// A screencopy of a window was captured
+  Screencopy(ToplevelInfo, image::RgbaImage),
 
   /// The full-title tooltip surfaced
   TooltipSurface(surface::Action<Message>),
@@ -227,16 +229,20 @@ impl cosmic::Application for AppModel {
   fn view(&self) -> Element<'_, Self::Message> {
     let ctx = &self.core.applet;
 
-    let Some(active) = self.active.as_ref()
+    let nothing = ctx.autosize_window(widget::space());
+    let Some(app) = self.active.as_ref()
     else {
-      // no active window, render nothing
-      return ctx.autosize_window(widget::space()).into();
+      return nothing.into();
+    };
+    let Some(window) = app.active()
+    else {
+      return nothing.into();
     };
 
     // a lot of this code is adapted from
     // [cosmic::applet::Context::icon_button_from_handle] (specifically the size
     // calculations)
-    let icon_handle = active.icon().as_cosmic_icon();
+    let icon_handle = app.icon().as_cosmic_icon();
     let symbolic = icon_handle.symbolic;
 
     let Spacing { space_xxs, .. } = cosmic::theme::active().cosmic().spacing;
@@ -251,11 +257,10 @@ impl cosmic::Application for AppModel {
     let button_height = icon_width + 2 * vpadding;
 
     #[allow(clippy::cast_possible_truncation)]
-    let raw_text = self.template.replace(
-      active.app_name(),
-      active.title(),
-      (active.siblings().len() + 1) as u32,
-    );
+    let raw_text = self
+      .template
+      .replace(app.name(), window.title(), (app.window_count()) as u32);
+
     let text = widget::container(
       ctx
         .text(raw_text.clone())
@@ -344,8 +349,9 @@ impl cosmic::Application for AppModel {
     // listen for wayland toplevel events to track the currently active window
     let active_window = wayland_subscription().map(|event| match event {
       WaylandEvent::Init(tx) => Message::InitRequestChannel(tx),
-      WaylandEvent::Activated(window) => Message::WindowActivated(Box::new(window)),
-      WaylandEvent::SiblingsChanged(siblings) => Message::SiblingsChanged(siblings),
+      WaylandEvent::AppUpdate(app) => Message::AppActivated(app),
+      WaylandEvent::WindowUpdate(windows) => Message::WindowsUpdated(windows),
+      WaylandEvent::Image(toplevel, image) => Message::Screencopy(toplevel, image),
     });
 
     // watch for config changes
@@ -355,13 +361,13 @@ impl cosmic::Application for AppModel {
       .map(|update| Message::UpdateConfig(update.config));
 
     // track the applet's bounds
-    let rectangle =
+    let applet_rectangle =
       rectangle_tracker_subscription(RECTANGLE_ID).map(|(_, update)| Message::Rectangle(update));
 
     // something to do with activating windows when they spawn
     let token = activation_token_subscription(0).map(Message::Token);
 
-    Subscription::batch(vec![active_window, config, rectangle, token])
+    Subscription::batch(vec![active_window, config, applet_rectangle, token])
   }
 
   /// Handles messages emitted by the application and its widgets.
@@ -384,13 +390,19 @@ impl cosmic::Application for AppModel {
         return self.close_popup();
       }
 
-      Message::WindowActivated(active) => {
-        self.active = *active;
+      Message::AppActivated(active) => {
+        self.active = active;
       }
 
-      Message::SiblingsChanged(siblings) => {
-        if let Some(active) = self.active.as_mut() {
-          active.set_siblings(siblings);
+      Message::WindowsUpdated(windows) => {
+        if let Some(app) = self.active.as_mut() {
+          app.set_windows(&windows);
+        }
+      }
+
+      Message::Screencopy(toplevel, image) => {
+        if let Some(app) = self.active.as_mut() {
+          app.update_image(&toplevel, image);
         }
       }
 
@@ -467,6 +479,17 @@ impl cosmic::Application for AppModel {
         }
         else {
           self.page = Page::Main;
+          if let Some(active) = self.active.as_ref()
+            && let Some(tx) = self.wayland_tx.as_ref()
+          {
+            // request thumbnail image for each window
+            for win in active.windows() {
+              if let Err(why) = tx.send(WaylandRequest::Screencopy(win.foreign_toplevel().clone()))
+              {
+                tracing::error!(%why, "failed to send screencopy request");
+              }
+            }
+          }
           Self::build_popup()
         };
       }
@@ -550,13 +573,15 @@ impl AppModel {
         .width(Length::Fill)
     }
 
-    let Some(active) = self.active.as_ref()
+    let placeholder =
+      cosmic::applet::padded_control(widget::text("No active window")).center_x(Length::Fill);
+    let Some(app) = self.active.as_ref()
     else {
-      // this will most likely never be visible, but it's here to avoid ever
-      // having an empty popup
-      return cosmic::applet::padded_control(widget::text("No active window"))
-        .center_x(Length::Fill)
-        .into();
+      return placeholder.into();
+    };
+    let Some(active) = app.active()
+    else {
+      return placeholder.into();
     };
 
     let Spacing {
@@ -587,7 +612,7 @@ impl AppModel {
         .width(Length::Fill),
     );
 
-    let launchers = active.actions();
+    let launchers = app.actions();
     if !launchers.is_empty() {
       content = content.push(widget::divider::horizontal::light());
 
@@ -599,42 +624,81 @@ impl AppModel {
       }
     }
 
-    let siblings = active.siblings();
-    if !siblings.is_empty() {
+    let windows: Vec<_> = app.windows().collect();
+    if !windows.is_empty() {
+      const THUMBNAIL_HEIGHT: f32 = 120.0;
+      const IMAGE_HEIGHT: f32 = 90.0;
+
       content = content.push(widget::divider::horizontal::light());
 
-      for window in siblings {
-        let mut name = widget::text::body(window.title())
-          .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
-          .width(Length::Fill);
+      let mut thumbnails = Vec::with_capacity(windows.len());
 
-        if window.is_minimized() {
+      for win in windows {
+        let img: Element<'_, Message> = if let Some(img) = win.image() {
+          widget::Image::new(Handle::from_rgba(img.width(), img.height(), img.to_vec())).into()
+        }
+        else {
+          // fill with empty space
+          widget::space()
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        };
+
+        let img = img
+          // wrap with container to create rounded rectangle border
+          .apply(widget::container)
+          .class(cosmic::theme::Container::custom(move |theme| {
+            widget::container::Style {
+              border: Border {
+                color: theme.cosmic().bg_divider().into(),
+                width: 1.0,
+                radius: 1.0.into(),
+              },
+              ..Default::default()
+            }
+          }))
+          .padding(1u16)
+          // wrap with container to constrain the size
+          .apply(widget::container)
+          .width(Length::Fill)
+          .height(Length::Fixed(IMAGE_HEIGHT))
+          .center(Length::Fill);
+
+        let mut title = widget::text::body(win.title())
+          .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+          .width(Length::Fill)
+          .center();
+
+        if win.is_minimized() {
           let color: Color = cosmic::theme::active().cosmic().on_bg_color().into();
-          name = name.class(cosmic::theme::Text::Color(Color {
+          title = title.class(cosmic::theme::Text::Color(Color {
             a: color.a * 0.6,
             ..color
           }));
         }
 
-        let mut row = widget::Row::new()
-          .push(name)
-          .spacing(space_xxs)
-          .align_y(Alignment::Center);
+        let mut col = widget::Column::new().spacing(space_xxs);
+        col = col.push(img).push(title);
 
-        if window.is_minimized() {
-          row = row.push(
-            icon::from_name("window-minimize-symbolic")
-              .size(16)
-              .symbolic(true),
-          );
-        }
+        let button = widget::button::custom(col)
+          .class(thumbnail_button_style(win.is_active()))
+          .width(Length::Fill)
+          .height(Length::Fixed(THUMBNAIL_HEIGHT))
+          .padding(space_xxs)
+          .selected(win.is_active())
+          .on_press(Message::Request(WaylandRequest::Activate(
+            win.foreign_toplevel().clone(),
+          )));
 
-        let button = menu_item_button(row).on_press(Message::Request(WaylandRequest::Activate(
-          window.foreign_toplevel().clone(),
-        )));
-
-        content = content.push(button);
+        thumbnails.push(button.into());
       }
+
+      content = content.push(
+        widget::container(thumbnail_grid(thumbnails, space_xxs))
+          .padding(space_xxs)
+          .width(Length::Fill),
+      );
     }
 
     ctx.popup_container(content).into()
@@ -760,7 +824,7 @@ fn launch_action(launch: DesktopLaunch, token: Option<String>) -> Task<cosmic::A
 }
 
 /// Builds a list of window control buttons
-fn window_control_buttons<'elem>(active: &WindowData) -> Vec<Element<'elem, Message>> {
+fn window_control_buttons<'elem>(active: &Window) -> Vec<Element<'elem, Message>> {
   /// Common config for each button
   ///
   /// TODO: check capabilities of window, make `on_press` an option to disable
@@ -821,7 +885,7 @@ fn window_control_buttons<'elem>(active: &WindowData) -> Vec<Element<'elem, Mess
     WaylandRequest::Fullscreen(active.foreign_toplevel().clone()),
   );
 
-  let pin = if active.is_sticky() {
+  let pin = if active.is_pinned() {
     icon_button(
       "pin-symbolic",
       fl!("unpin"),
@@ -847,4 +911,93 @@ fn window_control_buttons<'elem>(active: &WindowData) -> Vec<Element<'elem, Mess
   );
 
   vec![min, max, full, pin, close]
+}
+
+/// Style for one of the clickable window thumbnails in the window grid. Taken
+/// from [cosmic-app-list] in order to match it exactly.
+///
+/// [cosmic-app-list]: https://github.com/pop-os/cosmic-applets/blob/master/cosmic-app-list/src/app.rs#L531
+fn thumbnail_button_style(selected: bool) -> cosmic::theme::Button {
+  let radius = cosmic::theme::active()
+    .cosmic()
+    .radius_m()
+    .map(|x| if x < 8.0 { x } else { x - 4.0 });
+
+  cosmic::theme::Button::Custom {
+    active: Box::new(move |focused, theme| {
+      let a = widget::button::Catalog::active(
+        theme,
+        focused,
+        selected,
+        &cosmic::theme::Button::AppletMenu,
+      );
+      widget::button::Style {
+        background: if selected {
+          Some(cosmic::iced::Background::Color(
+            theme.cosmic().icon_button.selected_state_color().into(),
+          ))
+        }
+        else {
+          a.background
+        },
+        border_radius: radius.into(),
+        outline_width: 0.0,
+        ..a
+      }
+    }),
+    hovered: Box::new(move |focused, theme| {
+      let focused = selected || focused;
+      let text = widget::button::Catalog::hovered(
+        theme,
+        focused,
+        focused,
+        &cosmic::theme::Button::AppletMenu,
+      );
+      widget::button::Style {
+        border_radius: radius.into(),
+        outline_width: 0.0,
+        ..text
+      }
+    }),
+    disabled: Box::new(move |theme| {
+      let text = widget::button::Catalog::disabled(theme, &cosmic::theme::Button::AppletMenu);
+      widget::button::Style {
+        border_radius: radius.into(),
+        outline_width: 0.0,
+        ..text
+      }
+    }),
+    pressed: Box::new(move |focused, theme| {
+      let focused = selected || focused;
+      let text = widget::button::Catalog::pressed(
+        theme,
+        focused,
+        focused,
+        &cosmic::theme::Button::AppletMenu,
+      );
+      widget::button::Style {
+        border_radius: radius.into(),
+        outline_width: 0.0,
+        ..text
+      }
+    }),
+  }
+}
+
+/// Builds a thumbnail grid layout, filling it with the elements in `cells`.
+fn thumbnail_grid(cells: Vec<Element<'_, Message>>, gap: u16) -> Element<'_, Message> {
+  let mut rows = widget::Column::new().spacing(gap);
+  let mut iter = cells.into_iter();
+
+  // grap two items at a time and build a row each
+  while let Some(first) = iter.next() {
+    // if no second element, fill with horizontal space
+    let second = iter
+      .next()
+      .unwrap_or_else(|| widget::space::horizontal().width(Length::Fill).into());
+
+    rows = rows.push(widget::Row::new().push(first).push(second).spacing(gap));
+  }
+
+  rows.into()
 }
