@@ -25,13 +25,28 @@ use crate::{app::DesktopLaunch, fl};
 /// The currently active application
 #[derive(Clone, Debug)]
 pub struct ActiveApp {
+  /// The appid as it appears in [`ToplevelInfo::app_id`]. This may not match
+  /// the appid found in the desktop entry, so it must be obtained from the
+  /// active window. Used to check if a window belongs to this app.
+  id: String,
+
+  /// The name of the app. If the desktop entry doesn't contain a name, it
+  /// defaults to the window title. Instead, we resolve this during construction
+  /// to default to the appid.
   name: String,
 
   /// Maps window ids to [`Window`]s, which are a lightweight wrapper for a
   /// [`ToplevelInfo`] and thumbnail image
   windows: WindowMap,
 
+  /// The resolved `[Desktop Entry]` section of the desktop file. This provides
+  /// direct access to fields such as name and icon without returning options or
+  /// results.
   desktop: DesktopEntryData,
+
+  /// The list of desktop actions. If the app doesn't define a "new-window"
+  /// action, we create one from scratch and prepend it to the list, using the
+  /// app's default `Exec` field.
   actions: Vec<DesktopLaunch>,
 }
 
@@ -122,6 +137,7 @@ impl ActiveApp {
     };
 
     Some(Self {
+      id: appid.to_string(),
       name,
       windows,
       desktop: data,
@@ -129,7 +145,7 @@ impl ActiveApp {
     })
   }
 
-  pub fn id(&self) -> &str { &self.desktop.id }
+  pub fn id(&self) -> &str { &self.id }
   pub fn name(&self) -> &str { &self.name }
   pub fn icon(&self) -> &IconSource { &self.desktop.icon }
   pub fn actions(&self) -> &[DesktopLaunch] { &self.actions }
@@ -164,6 +180,9 @@ impl Display for ActiveApp {
   }
 }
 
+/// An index map of window ids to [`Window`]s. An index map is used to keep a
+/// stable order for a better user experience, particularly in the window
+/// switcher ui.
 pub type WindowMap = IndexMap<String, Window>;
 
 #[derive(Clone, Debug)]

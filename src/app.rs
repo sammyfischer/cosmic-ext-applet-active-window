@@ -423,13 +423,17 @@ impl cosmic::Application for AppModel {
 
       Message::AppActivated(active) => {
         self.active = active;
-        self.request_screencopies();
+        if self.popup.is_some() {
+          self.request_screencopies();
+        }
       }
 
       Message::WindowsUpdated(windows) => {
         if let Some(app) = self.active.as_mut() {
           app.set_windows(&windows);
-          self.request_screencopies();
+          if self.popup.is_some() {
+            self.request_screencopies();
+          }
         }
       }
 
