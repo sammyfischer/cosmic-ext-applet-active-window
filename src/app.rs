@@ -30,7 +30,6 @@ use cosmic::{
     image::Handle,
     layer_container,
     rectangle_tracker::{RectangleUpdate, rectangle_tracker_subscription},
-    row,
   },
 };
 
@@ -419,7 +418,12 @@ impl cosmic::Application for AppModel {
         if let Some(tx) = self.wayland_tx.as_ref() {
           let _ = tx.send(req);
         }
-        if close {
+        if close
+          || self
+            .active
+            .as_ref()
+            .is_none_or(|app| app.window_count() <= 1)
+        {
           return self.close_popup();
         }
       }
@@ -841,7 +845,7 @@ fn window_control_buttons<'elem>(active: &Window) -> Vec<Element<'elem, Message>
   let min = icon_button(
     "window-minimize-symbolic",
     fl!("minimize"),
-    active.is_minimized().then_some(accent_color),
+    None,
     WaylandRequest::Minimize(active.foreign_toplevel().clone()),
   );
 
@@ -1058,8 +1062,15 @@ fn thumbnail(win: &Window) -> Element<'_, Message> {
       true,
     ));
 
-  let overlay = row![
-    widget::space::horizontal(),
+  let mut overlay = widget::Row::new()
+    .push(widget::space::horizontal())
+    .padding(space_xxs)
+    .spacing(space_xxxs)
+    .width(Length::Fill)
+    .height(Length::Fill);
+
+  // minimize button
+  overlay = overlay.push(
     widget::button::custom(
       widget::icon::from_name(if win.is_minimized() {
         "pan-up-symbolic"
@@ -1067,25 +1078,41 @@ fn thumbnail(win: &Window) -> Element<'_, Message> {
       else {
         "window-minimize-symbolic"
       })
-      .size(14)
+      .size(14),
     )
     .padding(space_xxs)
     .on_press(Message::Request(
       WaylandRequest::Minimize(win.foreign_toplevel().clone()),
       false,
     )),
+  );
+
+  // pin button
+  overlay = overlay.push(
+    widget::button::custom(widget::icon::from_name("pin-symbolic").size(14))
+      .class(if win.is_pinned() {
+        cosmic::theme::Button::Suggested
+      }
+      else {
+        cosmic::theme::Button::Standard
+      })
+      .padding(space_xxs)
+      .on_press(Message::Request(
+        WaylandRequest::Sticky(win.foreign_toplevel().clone()),
+        false,
+      )),
+  );
+
+  // close button
+  overlay = overlay.push(
     widget::button::custom(widget::icon::from_name("window-close-symbolic").size(14))
       .class(cosmic::theme::Button::Destructive)
       .padding(space_xxs)
       .on_press(Message::Request(
         WaylandRequest::Close(win.foreign_toplevel().clone()),
         false,
-      ))
-  ]
-  .padding(space_xxs)
-  .spacing(space_xxxs)
-  .width(Length::Fill)
-  .height(Length::Fill);
+      )),
+  );
 
   cosmic::iced::widget::hover(button, overlay)
 }
