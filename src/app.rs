@@ -650,7 +650,7 @@ impl AppModel {
     let windows: Vec<_> = app.windows().collect();
     if !windows.is_empty() {
       const THUMBNAIL_HEIGHT: f32 = 120.0;
-      const IMAGE_HEIGHT: f32 = 90.0;
+      const IMAGE_HEIGHT: f32 = 100.0;
 
       content = content.push(widget::divider::horizontal::light());
 
