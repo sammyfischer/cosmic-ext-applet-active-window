@@ -30,6 +30,7 @@ use cosmic::{
     image::Handle,
     layer_container,
     rectangle_tracker::{RectangleUpdate, rectangle_tracker_subscription},
+    row,
   },
 };
 
@@ -120,7 +121,7 @@ pub enum Message {
   CountSubscription,
 
   /// Make a wayland request
-  Request(WaylandRequest),
+  Request(WaylandRequest, bool),
 
   AppActivated(Option<ActiveApp>),
   WindowsUpdated(Vec<ToplevelInfo>),
@@ -414,11 +415,13 @@ impl cosmic::Application for AppModel {
         self.subscription_counter += 1;
       }
 
-      Message::Request(req) => {
+      Message::Request(req, close) => {
         if let Some(tx) = self.wayland_tx.as_ref() {
           let _ = tx.send(req);
         }
-        return self.close_popup();
+        if close {
+          return self.close_popup();
+        }
       }
 
       Message::AppActivated(active) => {
@@ -653,72 +656,12 @@ impl AppModel {
 
     let windows: Vec<_> = app.windows().collect();
     if !windows.is_empty() {
-      const THUMBNAIL_HEIGHT: f32 = 120.0;
-      const IMAGE_HEIGHT: f32 = 100.0;
-
       content = content.push(widget::divider::horizontal::light());
 
       let mut thumbnails = Vec::with_capacity(windows.len());
 
       for win in windows {
-        let img: Element<'_, Message> = if let Some(img) = win.image() {
-          widget::Image::new(Handle::from_rgba(img.width(), img.height(), img.to_vec())).into()
-        }
-        else {
-          // fill with empty space
-          widget::space()
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        };
-
-        let img = img
-          // wrap with container to create rounded rectangle border
-          .apply(widget::container)
-          .class(cosmic::theme::Container::custom(move |theme| {
-            widget::container::Style {
-              border: Border {
-                color: theme.cosmic().bg_divider().into(),
-                width: 1.0,
-                radius: 1.0.into(),
-              },
-              ..Default::default()
-            }
-          }))
-          .padding(1u16)
-          // wrap with container to constrain the size
-          .apply(widget::container)
-          .width(Length::Fill)
-          .height(Length::Fixed(IMAGE_HEIGHT))
-          .center(Length::Fill);
-
-        let mut title = widget::text::body(win.title())
-          .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
-          .width(Length::Fill)
-          .center();
-
-        if win.is_minimized() {
-          let color: Color = cosmic::theme::active().cosmic().on_bg_color().into();
-          title = title.class(cosmic::theme::Text::Color(Color {
-            a: color.a * 0.6,
-            ..color
-          }));
-        }
-
-        let mut col = widget::Column::new().spacing(space_xxs);
-        col = col.push(img).push(title);
-
-        let button = widget::button::custom(col)
-          .class(thumbnail_button_style(win.is_active()))
-          .width(Length::Fill)
-          .height(Length::Fixed(THUMBNAIL_HEIGHT))
-          .padding(space_xxs)
-          .selected(win.is_active())
-          .on_press(Message::Request(WaylandRequest::Activate(
-            win.foreign_toplevel().clone(),
-          )));
-
-        thumbnails.push(button.into());
+        thumbnails.push(thumbnail(win));
       }
 
       content = content.push(
@@ -882,7 +825,7 @@ fn window_control_buttons<'elem>(active: &Window) -> Vec<Element<'elem, Message>
     let mut button = widget::button::icon(icon::from_name(icon).symbolic(true).size(SIZE))
       .icon_size(SIZE)
       .tooltip(name)
-      .on_press(Message::Request(on_press));
+      .on_press(Message::Request(on_press, true));
 
     if let Some(tint) = tint {
       button = button.class(tinted_icon_class(tint));
@@ -1041,4 +984,108 @@ fn thumbnail_grid(cells: Vec<Element<'_, Message>>, gap: u16) -> Element<'_, Mes
   }
 
   rows.into()
+}
+
+/// Builds the thumbnail preview of each window. This is an entirely clickable
+/// element that contains the window image and title.
+fn thumbnail(win: &Window) -> Element<'_, Message> {
+  const THUMBNAIL_HEIGHT: f32 = 120.0;
+  const IMAGE_HEIGHT: f32 = 100.0;
+
+  let Spacing {
+    space_xxxs,
+    space_xxs,
+    ..
+  } = cosmic::theme::active().cosmic().spacing;
+
+  let img: Element<'_, Message> = if let Some(img) = win.image() {
+    widget::Image::new(Handle::from_rgba(img.width(), img.height(), img.to_vec()))
+      .opacity(if win.is_minimized() { 0.5 } else { 1f32 })
+      .into()
+  }
+  else {
+    // fill with empty space
+    widget::space()
+      .width(Length::Fill)
+      .height(Length::Fill)
+      .into()
+  };
+
+  let img = img
+    // wrap with container to create rounded rectangle border
+    .apply(widget::container)
+    .class(cosmic::theme::Container::custom(move |theme| {
+      widget::container::Style {
+        border: Border {
+          color: theme.cosmic().bg_divider().into(),
+          width: 1.0,
+          radius: 1.0.into(),
+        },
+        ..Default::default()
+      }
+    }))
+    .padding(1u16)
+    // wrap with container to constrain the size
+    .apply(widget::container)
+    .width(Length::Fill)
+    .height(Length::Fixed(IMAGE_HEIGHT))
+    .center(Length::Fill);
+
+  let mut title = widget::text::body(win.title())
+    .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
+    .width(Length::Fill)
+    .center();
+
+  if win.is_minimized() {
+    let color: Color = cosmic::theme::active().cosmic().on_bg_color().into();
+    title = title.class(cosmic::theme::Text::Color(Color {
+      a: color.a * 0.6,
+      ..color
+    }));
+  }
+
+  let mut col = widget::Column::new().spacing(space_xxs);
+  col = col.push(img).push(title);
+
+  let button = widget::button::custom(col)
+    .class(thumbnail_button_style(win.is_active()))
+    .width(Length::Fill)
+    .height(Length::Fixed(THUMBNAIL_HEIGHT))
+    .padding(space_xxs)
+    .selected(win.is_active())
+    .on_press(Message::Request(
+      WaylandRequest::Activate(win.foreign_toplevel().clone()),
+      true,
+    ));
+
+  let overlay = row![
+    widget::space::horizontal(),
+    widget::button::custom(
+      widget::icon::from_name(if win.is_minimized() {
+        "pan-up-symbolic"
+      }
+      else {
+        "window-minimize-symbolic"
+      })
+      .size(14)
+    )
+    .padding(space_xxs)
+    .on_press(Message::Request(
+      WaylandRequest::Minimize(win.foreign_toplevel().clone()),
+      false,
+    )),
+    widget::button::custom(widget::icon::from_name("window-close-symbolic").size(14))
+      .class(cosmic::theme::Button::Destructive)
+      .padding(space_xxs)
+      .on_press(Message::Request(
+        WaylandRequest::Close(win.foreign_toplevel().clone()),
+        false,
+      ))
+  ]
+  .padding(space_xxs)
+  .spacing(space_xxxs)
+  .width(Length::Fill)
+  .height(Length::Fill);
+
+  cosmic::iced::widget::hover(button, overlay)
 }
