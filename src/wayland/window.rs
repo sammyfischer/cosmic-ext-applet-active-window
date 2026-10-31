@@ -152,8 +152,8 @@ impl ActiveApp {
   }
 
   pub fn update_image(&mut self, toplevel: &ToplevelInfo, image: RgbaImage) {
-    if let Some(window) = self.windows.get_mut(&toplevel.app_id) {
-      window.set_image(image);
+    if let Some(window) = self.windows.get_mut(&toplevel.identifier) {
+      window.image = Some(image);
     }
   }
 }
@@ -186,7 +186,6 @@ impl Window {
   pub fn is_pinned(&self) -> bool { self.info.state.contains(&State::Sticky) }
 
   pub fn image(&self) -> Option<&RgbaImage> { self.image.as_ref() }
-  pub(super) fn set_image(&mut self, image: RgbaImage) { self.image = Some(image) }
 }
 
 impl Display for Window {

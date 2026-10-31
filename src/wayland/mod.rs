@@ -5,6 +5,7 @@ use std::{
     fd::{FromRawFd, RawFd},
     unix::net::UnixStream,
   },
+  sync::LazyLock,
 };
 
 use anyhow::Context;
@@ -40,7 +41,7 @@ use cosmic::{
 use futures::{
   SinkExt,
   StreamExt,
-  channel::mpsc::{Sender, UnboundedSender},
+  channel::mpsc::{Sender, UnboundedReceiver, UnboundedSender},
 };
 pub use window::*;
 
@@ -78,6 +79,9 @@ sctk::delegate_seat!(WaylandState);
 pub enum WaylandEvent {
   /// Initialize the channel to send wayland requests
   Init(calloop::channel::Sender<WaylandRequest>),
+
+  /// Wayland handler thread died
+  Finished,
 
   AppUpdate(Option<ActiveApp>),
   WindowUpdate(Vec<ToplevelInfo>),
@@ -126,11 +130,6 @@ impl ToplevelInfoHandler for WaylandState {
   fn toplevel_closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &ToplevelHandle) {}
 
   fn info_done(&mut self, _: &Connection, _: &QueueHandle<Self>) {
-    // if app changed, recalc entire thing, send new ActiveApp to ui
-    //
-    // if same app, send updates to window list
-    // just send the entire list tbh
-
     let active = self
       .toplevel_info_state
       .toplevels()
@@ -147,7 +146,7 @@ impl ToplevelInfoHandler for WaylandState {
       return;
     }
 
-    // send new set of windows
+    // else send new set of windows
     let toplevels: Vec<_> = self.toplevel_info_state.toplevels().cloned().collect();
     self.send_event(WaylandEvent::WindowUpdate(toplevels));
   }
@@ -355,32 +354,75 @@ pub fn wayland_handler(
   Ok(())
 }
 
+static EVENT_RX: LazyLock<tokio::sync::Mutex<Option<UnboundedReceiver<WaylandEvent>>>> =
+  LazyLock::new(|| tokio::sync::Mutex::new(None));
+
+enum SubscriptionState {
+  Waiting,
+  Finished,
+}
+
 /// Entry point to the wayland handler. Sets up channels and spawns thread.
 pub fn wayland_subscription() -> cosmic::iced::Subscription<WaylandEvent> {
   Subscription::run_with(TypeId::of::<WaylandEvent>(), |_| {
-    cosmic::iced::stream::channel(10, move |mut output: Sender<WaylandEvent>| async move {
-      // channel to handle wayland requests (close, minimize, etc.)
-      let (request_tx, request_rx) = calloop::channel::channel();
+    cosmic::iced::stream::channel(50, move |mut output: Sender<WaylandEvent>| async move {
+      let mut state = SubscriptionState::Waiting;
 
-      // channel to handle events (window activation state changed)
-      let (event_tx, mut event_rx) = futures::channel::mpsc::unbounded();
-
-      std::thread::spawn(move || {
-        if let Err(why) = wayland_handler(event_tx, request_rx) {
-          tracing::error!(?why, "wayland handler errored");
-        }
-      });
-
-      if let Err(why) = output.send(WaylandEvent::Init(request_tx)).await {
-        tracing::error!(?why, "failed to send init event");
+      loop {
+        state = start_listening(state, &mut output).await;
       }
-      while let Some(event) = event_rx.next().await {
-        if let Err(why) = output.send(event).await {
-          tracing::error!(?why, "failed to forward an event");
-        }
-      }
-
-      futures::future::pending::<()>().await;
     })
   })
+}
+
+/// State machine impl for subscription. If the current state is
+/// [`SubscriptionState::Waiting`], handle the next event. If the state is
+/// [`SubscriptionState::Finished`], wait indefinitely. The state is set to
+/// finished when the event receiver closes.
+async fn start_listening(
+  state: SubscriptionState,
+  output: &mut Sender<WaylandEvent>,
+) -> SubscriptionState {
+  match state {
+    SubscriptionState::Waiting => {
+      let mut guard = EVENT_RX.lock().await;
+      let event_rx = {
+        // if event receiver isn't initialized
+        if guard.is_none() {
+          // channel to handle wayland requests (close, minimize, etc.)
+          let (request_tx, request_rx) = calloop::channel::channel();
+
+          // channel to handle events (active app/window changed)
+          let (event_tx, event_rx) = futures::channel::mpsc::unbounded();
+
+          // spawn thread once
+          std::thread::spawn(move || {
+            if let Err(why) = wayland_handler(event_tx, request_rx) {
+              tracing::error!(?why, "wayland handler errored");
+            }
+          });
+
+          *guard = Some(event_rx);
+
+          if let Err(why) = output.send(WaylandEvent::Init(request_tx)).await {
+            tracing::error!(?why, "failed to send init event");
+          }
+        }
+
+        guard.as_mut().unwrap()
+      };
+
+      if let Some(event) = event_rx.next().await {
+        _ = output.send(event).await;
+        SubscriptionState::Waiting
+      }
+      else {
+        _ = output.send(WaylandEvent::Finished).await;
+        tracing::error!("wayland handler died");
+        SubscriptionState::Finished
+      }
+    }
+
+    SubscriptionState::Finished => cosmic::iced::futures::future::pending().await,
+  }
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::rc::Rc;
+use std::{rc::Rc, time::Duration};
 
 use cosmic::{
   applet::token::subscription::{TokenRequest, TokenUpdate, activation_token_subscription},
@@ -86,6 +86,7 @@ pub struct AppModel {
   /// A sender for wayland requests (e.g. close, minimize)
   /// TODO: could combine token request handling into this
   wayland_tx: Option<calloop::channel::Sender<WaylandRequest>>,
+  subscription_counter: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +113,12 @@ pub enum Message {
   /// The wayland request channel was opened
   InitRequestChannel(calloop::channel::Sender<WaylandRequest>),
 
+  /// Clean up after the wayland subscription died
+  FinishWaylandSubscription,
+
+  /// Increments the subscription counter by 1
+  CountSubscription,
+
   /// Make a wayland request
   Request(WaylandRequest),
 
@@ -119,7 +126,7 @@ pub enum Message {
   WindowsUpdated(Vec<ToplevelInfo>),
 
   /// A screencopy of a window was captured
-  Screencopy(ToplevelInfo, image::RgbaImage),
+  Image(ToplevelInfo, image::RgbaImage),
 
   /// The full-title tooltip surfaced
   TooltipSurface(surface::Action<Message>),
@@ -349,9 +356,10 @@ impl cosmic::Application for AppModel {
     // listen for wayland toplevel events to track the currently active window
     let active_window = wayland_subscription().map(|event| match event {
       WaylandEvent::Init(tx) => Message::InitRequestChannel(tx),
+      WaylandEvent::Finished => Message::FinishWaylandSubscription,
       WaylandEvent::AppUpdate(app) => Message::AppActivated(app),
       WaylandEvent::WindowUpdate(windows) => Message::WindowsUpdated(windows),
-      WaylandEvent::Image(toplevel, image) => Message::Screencopy(toplevel, image),
+      WaylandEvent::Image(toplevel, image) => Message::Image(toplevel, image),
     });
 
     // watch for config changes
@@ -380,7 +388,30 @@ impl cosmic::Application for AppModel {
       Message::None => {}
 
       Message::InitRequestChannel(tx) => {
-        self.wayland_tx = Some(tx);
+        self.wayland_tx.replace(tx);
+      }
+
+      Message::FinishWaylandSubscription => {
+        self.active = None;
+
+        let count = self.subscription_counter;
+        return cosmic::iced::Task::perform(
+          async move {
+            // exponential backoff
+            if let Some(millis) = 2u64.checked_pow(count).and_then(|x| x.checked_add(100)) {
+              tokio::time::sleep(Duration::from_millis(millis)).await;
+            }
+            else {
+              futures::future::pending::<()>().await;
+            }
+          },
+          |()| Message::CountSubscription,
+        )
+        .map(cosmic::action::app);
+      }
+
+      Message::CountSubscription => {
+        self.subscription_counter += 1;
       }
 
       Message::Request(req) => {
@@ -392,15 +423,17 @@ impl cosmic::Application for AppModel {
 
       Message::AppActivated(active) => {
         self.active = active;
+        self.request_screencopies();
       }
 
       Message::WindowsUpdated(windows) => {
         if let Some(app) = self.active.as_mut() {
           app.set_windows(&windows);
+          self.request_screencopies();
         }
       }
 
-      Message::Screencopy(toplevel, image) => {
+      Message::Image(toplevel, image) => {
         if let Some(app) = self.active.as_mut() {
           app.update_image(&toplevel, image);
         }
@@ -479,17 +512,7 @@ impl cosmic::Application for AppModel {
         }
         else {
           self.page = Page::Main;
-          if let Some(active) = self.active.as_ref()
-            && let Some(tx) = self.wayland_tx.as_ref()
-          {
-            // request thumbnail image for each window
-            for win in active.windows() {
-              if let Err(why) = tx.send(WaylandRequest::Screencopy(win.foreign_toplevel().clone()))
-              {
-                tracing::error!(%why, "failed to send screencopy request");
-              }
-            }
-          }
+          self.request_screencopies();
           Self::build_popup()
         };
       }
@@ -803,6 +826,20 @@ impl AppModel {
     match self.popup.take() {
       Some(id) => destroy_popup(id),
       None => Task::none(),
+    }
+  }
+
+  /// Send requests to get a screencopy of each window of the active app
+  fn request_screencopies(&self) {
+    if let Some(active) = self.active.as_ref()
+      && let Some(tx) = self.wayland_tx.as_ref()
+    {
+      // request thumbnail image for each window
+      for win in active.windows() {
+        if let Err(why) = tx.send(WaylandRequest::Screencopy(win.foreign_toplevel().clone())) {
+          tracing::error!("failed to send screencopy request: {}", why);
+        }
+      }
     }
   }
 }

@@ -43,6 +43,7 @@ use cosmic::cctk::{
     },
   },
 };
+use futures::channel::mpsc::UnboundedSender;
 
 use crate::wayland::{WaylandEvent, WaylandState};
 
@@ -124,12 +125,14 @@ impl SessionHandle {
     &self,
     timeout: Duration,
     mut cond: F,
-  ) -> MutexGuard<'_, Session> {
-    self
-      .cond
-      .wait_timeout_while(self.inner.lock().unwrap(), timeout, |data| cond(data))
-      .unwrap()
-      .0
+  ) -> anyhow::Result<MutexGuard<'_, Session>> {
+    Ok(
+      self
+        .cond
+        .wait_timeout_while(self.inner.lock().unwrap(), timeout, |data| cond(data))
+        .map_err(|_| anyhow::anyhow!("wait timed out"))?
+        .0,
+    )
   }
 }
 
@@ -179,6 +182,7 @@ impl ScreencopyHandler for WaylandState {
     SessionHandle::from_capture_session(session)
       .unwrap()
       .update(|data| {
+        tracing::error!("failed to capture frame: {:?}", reason);
         data.res = Some(Err(reason));
       });
   }
@@ -215,58 +219,45 @@ impl Dispatch<WlBuffer, ()> for WaylandState {
 }
 
 impl CaptureState {
-  pub(super) fn capture_image<Fd: AsFd>(
+  fn capture_image<Fd: AsFd>(
     &self,
     toplevel: &ToplevelInfo,
     fd: Fd,
-    size: Option<u32>,
-  ) -> Option<ShmImage<Fd>> {
+  ) -> anyhow::Result<Option<ShmImage<Fd>>> {
     let session = Arc::new(SessionHandle::default());
 
-    let capture_session = self
-      .capturer
-      .create_session(
-        &CaptureSource::Toplevel(toplevel.foreign_toplevel.clone()),
-        CaptureOptions::empty(),
-        &self.queue_handle,
-        SessionData {
-          session: session.clone(),
-          data: ScreencopySessionData::default(),
-        },
-      )
-      .ok()?;
+    let capture_session = self.capturer.create_session(
+      &CaptureSource::Toplevel(toplevel.foreign_toplevel.clone()),
+      CaptureOptions::empty(),
+      &self.queue_handle,
+      SessionData {
+        session: session.clone(),
+        data: ScreencopySessionData::default(),
+      },
+    )?;
 
-    self.connection.flush().ok()?;
+    self.connection.flush()?;
 
-    let formats = session
-      .wait_while(Duration::from_secs(10), |data| data.formats.is_none())
+    let Some(formats) = session
+      .wait_while(Duration::from_secs(10), |data| data.formats.is_none())?
       .formats
-      .take()?;
+      .take()
+    else {
+      return Ok(None);
+    };
 
     let (w, h) = formats.buffer_size;
     if w == 0 || h == 0 {
-      return None;
+      return Ok(None);
     }
 
     if !formats.shm_formats.contains(&wl_shm::Format::Abgr8888) {
-      tracing::error!(
-        "no compatible buffer format found. available formats: {:#?}",
-        formats
-      );
-      return None;
+      anyhow::bail!("no compatible buffer format found. available formats: {formats:#?}");
     }
 
     // px area * sizeof(rgba int)
     let buf_size = w * h * 4;
-    if let Some(size) = size {
-      // if requested size != the exact required buffer size
-      if size != buf_size {
-        return None;
-      }
-    }
-    else {
-      let _ = rustix::fs::ftruncate(&fd, buf_size.into());
-    }
+    let _ = rustix::fs::ftruncate(&fd, buf_size.into());
 
     // create shared memory pool
     let pool = self
@@ -290,32 +281,38 @@ impl CaptureState {
       data: ScreencopyFrameData::default(),
     });
 
+    self.connection.flush()?;
+
     // wait for response
     let res = session
-      .wait_while(Duration::from_secs(10), |data| data.res.is_none())
+      .wait_while(Duration::from_secs(10), |data| data.res.is_none())?
       .res
-      .take()?;
+      .take();
+
     pool.destroy();
     buf.destroy();
 
-    if res.is_ok() {
-      Some(ShmImage {
+    let Some(res) = res
+    else {
+      anyhow::bail!("timed out waiting for capture frame");
+    };
+
+    match res {
+      Ok(()) => Ok(Some(ShmImage {
         fd,
         width: w,
         height: h,
-      })
-    }
-    else {
-      None
+      })),
+      Err(why) => match why {
+        WEnum::Value(why) => Err(anyhow::anyhow!("{why:?}")),
+        WEnum::Unknown(code) => Err(anyhow::anyhow!("frame capture failed with code {code}")),
+      },
     }
   }
 }
 
 impl WaylandState {
   /// Spawns a thread capture and send the image as a [`WaylandEvent`].
-  #[allow(clippy::cast_possible_truncation)]
-  #[allow(clippy::cast_precision_loss)]
-  #[allow(clippy::cast_sign_loss)]
   pub(super) fn send_image(&self, toplevel: ToplevelInfo) {
     let tx = self.tx.clone();
 
@@ -326,45 +323,59 @@ impl WaylandState {
       capturer: self.screencopy_state.capturer().clone(),
     };
 
-    std::thread::spawn(move || -> anyhow::Result<()> {
-      let name = "active-window-screencopy";
-      let fd = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC)?;
-
-      let img = state.capture_image(&toplevel, fd, None);
-      let Some(img) = img
-      else {
-        tracing::error!("failed to get screencopy image");
-        return Ok(());
-      };
-
-      let img = img.image()?;
-
-      // largest side
-      let max = img.width().max(img.height());
-      let ratio = max as f32 / 256.0;
-
-      // if image (largest side) is larger than 256
-      let img = if ratio > 1.0 {
-        // scale down
-        let w = (img.width() as f32 / ratio).round();
-        let h = (img.height() as f32 / ratio).round();
-
-        image::imageops::resize(
-          &img,
-          w as u32,
-          h as u32,
-          image::imageops::FilterType::Lanczos3,
-        )
+    std::thread::spawn(move || {
+      if let Err(why) = capture_handler(&tx, &state, toplevel) {
+        tracing::error!(%why, "screencopy failed");
       }
-      else {
-        img
-      };
-
-      if let Err(why) = tx.unbounded_send(WaylandEvent::Image(toplevel, img)) {
-        tracing::error!(%why, "failed to send image event");
-      }
-
-      Ok(())
     });
   }
+}
+
+/// The capture thread
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_sign_loss)]
+fn capture_handler(
+  tx: &UnboundedSender<WaylandEvent>,
+  state: &CaptureState,
+  toplevel: ToplevelInfo,
+) -> anyhow::Result<()> {
+  let name = "active-window-screencopy";
+  let fd = rustix::fs::memfd_create(name, rustix::fs::MemfdFlags::CLOEXEC)?;
+
+  let img = state.capture_image(&toplevel, fd)?;
+  let Some(img) = img
+  else {
+    tracing::error!("failed to get screencopy image");
+    return Ok(());
+  };
+
+  let img = img.image()?;
+
+  // largest side
+  let max = img.width().max(img.height());
+  let ratio = max as f32 / 256.0;
+
+  // if image (largest side) is larger than 256
+  let img = if ratio > 1.0 {
+    // scale down
+    let w = (img.width() as f32 / ratio).round();
+    let h = (img.height() as f32 / ratio).round();
+
+    image::imageops::resize(
+      &img,
+      w as u32,
+      h as u32,
+      image::imageops::FilterType::Lanczos3,
+    )
+  }
+  else {
+    img
+  };
+
+  if let Err(why) = tx.unbounded_send(WaylandEvent::Image(toplevel, img)) {
+    tracing::error!(%why, "failed to send image event");
+  }
+
+  Ok(())
 }
