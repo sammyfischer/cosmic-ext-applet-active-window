@@ -671,7 +671,12 @@ impl AppModel {
       content = content.push(
         widget::container(thumbnail_grid(thumbnails, space_xxs))
           .padding(space_xxs)
-          .width(Length::Fill),
+          .width(Length::Fill)
+          .apply(widget::scrollable)
+          .apply(widget::container)
+          .width(Length::Fill)
+          // 2 thumbnails + padding above, below, and between
+          .max_height(THUMBNAIL_HEIGHT * 2.0 + f32::from(space_xxs) * 3.0),
       );
     }
 
@@ -990,12 +995,12 @@ fn thumbnail_grid(cells: Vec<Element<'_, Message>>, gap: u16) -> Element<'_, Mes
   rows.into()
 }
 
+const THUMBNAIL_HEIGHT: f32 = 120.0;
+const IMAGE_HEIGHT: f32 = 100.0;
+
 /// Builds the thumbnail preview of each window. This is an entirely clickable
 /// element that contains the window image and title.
 fn thumbnail(win: &Window) -> Element<'_, Message> {
-  const THUMBNAIL_HEIGHT: f32 = 120.0;
-  const IMAGE_HEIGHT: f32 = 100.0;
-
   let Spacing {
     space_xxxs,
     space_xxs,
