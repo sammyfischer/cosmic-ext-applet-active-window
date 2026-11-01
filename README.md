@@ -1,18 +1,33 @@
 # Active Window
 
-Shows the active window text
+Shows which window is active and adds a control panel to conveniently manage the active application.
+
+## Features
+
+Applet
+
+- see the current active window in the panel or dock
+- shows the app icon and window title
+- right click to change settings
+  - customize the text with a template using the variables `{name}` `{title}` and `{count}` (use `{{` and `}}` to include literal braces in the template)
+
+Control panel
+
+- view full window title
+- control the current window: minimize, maximize, close, etc.
+- run desktop actions for the current app
+- switch between windows of the same app
+  - quick controls to minimize/restore, pin/unpin, and close each window right from the switcher
 
 ## Installation
 
-A [justfile](./Justfile) is included by default for the [casey/just][just] command runner.
+Use the [justfile](./Justfile) to build and install. Use `just build-install` to build with the release profile and install system-wide.
 
 - `just` builds the application with the default `just build-release` recipe
-- `just run` builds and runs the application
 - `just install` installs the project into the system
 - `just vendor` creates a vendored tarball
 - `just build-vendored` compiles with vendored dependencies from that tarball
-- `just check` runs clippy on the project to check for linter warnings
-- `just check-json` can be used by IDEs that support LSP
+- `just uninstall` uninstalls by simply deleting the installed files. It does not remove config data.
 
 ## Translators
 
