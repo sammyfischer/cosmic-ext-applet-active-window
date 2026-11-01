@@ -122,6 +122,9 @@ pub enum Message {
   /// Make a wayland request
   Request(WaylandRequest, bool),
 
+  /// Close all windows of the current active app
+  CloseAll,
+
   AppActivated(Option<ActiveApp>),
   WindowsUpdated(Vec<ToplevelInfo>),
 
@@ -272,7 +275,7 @@ impl cosmic::Application for AppModel {
       ctx
         .text(raw_text.clone())
         .wrapping(Wrapping::None)
-        .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
+        .apply(truncate),
     )
     .max_width(self.config.max_width.clamp(50, 1000));
 
@@ -424,6 +427,17 @@ impl cosmic::Application for AppModel {
             .as_ref()
             .is_none_or(|app| app.window_count() <= 1)
         {
+          return self.close_popup();
+        }
+      }
+
+      Message::CloseAll => {
+        if let Some(tx) = self.wayland_tx.as_ref()
+          && let Some(app) = self.active.as_ref()
+        {
+          for window in app.windows() {
+            let _ = tx.send(WaylandRequest::Close(window.foreign_toplevel().clone()));
+          }
           return self.close_popup();
         }
       }
@@ -624,7 +638,7 @@ impl AppModel {
     let ctx = &self.core.applet;
     let mut content = widget::menu::menu_column::MenuColumn::new().align_x(Alignment::Center);
 
-    // the full title, since the tooltip is never visible while the popup is
+    // WINDOW TITLE
     let title = widget::text(active.title()).wrapping(Wrapping::WordOrGlyph);
     content = content.push(
       widget::container(title)
@@ -634,6 +648,7 @@ impl AppModel {
 
     content = content.push(widget::divider::horizontal::light());
 
+    // WINDOW CONTROLS
     let controls = widget::flex_row(window_control_buttons(active))
       .width(Length::Fill)
       .align_items(Alignment::Center)
@@ -646,18 +661,36 @@ impl AppModel {
         .width(Length::Fill),
     );
 
-    let launchers = app.actions();
-    if !launchers.is_empty() {
-      content = content.push(widget::divider::horizontal::light());
+    // LAUNCH ACTIONS
+    // always add divider bc there will always be a "close all" button
+    content = content.push(widget::divider::horizontal::light());
 
-      for launch in launchers {
-        let name = widget::text::body(launch.name.clone())
-          .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)));
-        let button = menu_item_button(name).on_press(Message::Launch(launch.clone()));
-        content = content.push(button);
-      }
+    let launchers = app.actions();
+    for launch in launchers {
+      // let name = widget::text::body(launch.name.clone())
+      //   .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)));
+      // let button =
+      // menu_item_button(name).on_press(Message::Launch(launch.clone()));
+      content = content.push(
+        widget::text::body(launch.name.clone())
+          .apply(truncate)
+          .apply(menu_item_button)
+          .on_press(Message::Launch(launch.clone())),
+      );
     }
 
+    // close all windows button (goes with launch actions)
+    content = content.push(
+      widget::text::body(fl!("close-all"))
+        .class(cosmic::theme::Text::Color(Color::from(
+          cosmic::theme::active().cosmic().destructive_text_color(),
+        )))
+        .apply(truncate)
+        .apply(menu_item_button)
+        .on_press(Message::CloseAll),
+    );
+
+    // WINDOW SWITCHER
     let windows: Vec<_> = app.windows().collect();
     if !windows.is_empty() {
       content = content.push(widget::divider::horizontal::light());
@@ -672,7 +705,9 @@ impl AppModel {
         widget::container(thumbnail_grid(thumbnails, space_xxs))
           .padding(space_xxs)
           .width(Length::Fill)
+          // wrap in scrollable container
           .apply(widget::scrollable)
+          // wrap in container to set max height (content is scrollable only when exceeding this)
           .apply(widget::container)
           .width(Length::Fill)
           // 2 thumbnails + padding above, below, and between
@@ -798,6 +833,12 @@ impl AppModel {
       }
     }
   }
+}
+
+/// Truncates text to one line. Chain this using `text.apply(truncate)`.
+#[inline]
+fn truncate(text: widget::Text<'_, cosmic::Theme>) -> widget::Text<'_, cosmic::Theme> {
+  text.ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
 }
 
 /// Launch a desktop action

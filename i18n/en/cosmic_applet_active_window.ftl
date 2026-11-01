@@ -10,6 +10,7 @@ unpin = Unpin
 close = Close
 
 launch-new-window = New Window
+close-all = Close All Windows
 
 config-max-width = Max title width (px)
 config-template = Title template
