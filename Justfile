@@ -98,14 +98,14 @@ vendor-extract:
 package: build
   just rootdir=debian/{{ name }} prefix=/usr install
 
-# Bump cargo version, create git commit, and create tag
+# Bump cargo version, commit, tag (don't include leading 'v' in version)
 tag version:
   find -type f -name Cargo.toml -exec sed -i '0,/^version/s/^version.*/version = "{{ version }}"/' '{}' \; -exec git add '{}' \;
   cargo check
   cargo clean
   git add Cargo.lock
   git commit -m 'release: {{ version }}'
-  git tag -a {{ version }} -m ''
+  git tag -a v{{ version }} -m 'release: {{ version }}'
 
 # Initialize the project by installing the precommit hook
 init:
