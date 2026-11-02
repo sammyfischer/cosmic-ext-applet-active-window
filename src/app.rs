@@ -1042,6 +1042,19 @@ const IMAGE_HEIGHT: f32 = 100.0;
 /// Builds the thumbnail preview of each window. This is an entirely clickable
 /// element that contains the window image and title.
 fn thumbnail(win: &Window) -> Element<'_, Message> {
+  fn mini_button<'elem>(icon: &str) -> widget::Button<'elem, Message> {
+    let Spacing { space_xxs, .. } = cosmic::theme::active().cosmic().spacing;
+
+    widget::button::custom(widget::icon::from_name(icon).size(14)).padding(space_xxs)
+  }
+
+  fn button_tooltip(
+    button: widget::Button<'_, Message>,
+    text: String,
+  ) -> widget::Tooltip<'_, Message> {
+    widget::tooltip(button, widget::text(text), widget::tooltip::Position::Top)
+  }
+
   let Spacing {
     space_xxxs,
     space_xxs,
@@ -1117,47 +1130,54 @@ fn thumbnail(win: &Window) -> Element<'_, Message> {
 
   // minimize button
   overlay = overlay.push(
-    widget::button::custom(
-      widget::icon::from_name(if win.is_minimized() {
-        "pan-up-symbolic"
-      }
-      else {
-        "window-minimize-symbolic"
-      })
-      .size(14),
-    )
-    .padding(space_xxs)
+    mini_button(if win.is_minimized() {
+      "pan-up-symbolic"
+    }
+    else {
+      "window-minimize-symbolic"
+    })
     .on_press(Message::Request(
       WaylandRequest::Minimize(win.foreign_toplevel().clone()),
       false,
-    )),
+    ))
+    .apply(|it| {
+      button_tooltip(
+        it,
+        if win.is_minimized() {
+          fl!("restore")
+        }
+        else {
+          fl!("minimize")
+        },
+      )
+    }),
   );
 
   // pin button
   overlay = overlay.push(
-    widget::button::custom(widget::icon::from_name("pin-symbolic").size(14))
+    mini_button("pin-symbolic")
       .class(if win.is_pinned() {
         cosmic::theme::Button::Suggested
       }
       else {
         cosmic::theme::Button::Standard
       })
-      .padding(space_xxs)
       .on_press(Message::Request(
         WaylandRequest::Sticky(win.foreign_toplevel().clone()),
         false,
-      )),
+      ))
+      .apply(|it| button_tooltip(it, if win.is_pinned() { fl!("unpin") } else { fl!("pin") })),
   );
 
   // close button
   overlay = overlay.push(
-    widget::button::custom(widget::icon::from_name("window-close-symbolic").size(14))
+    mini_button("window-close-symbolic")
       .class(cosmic::theme::Button::Destructive)
-      .padding(space_xxs)
       .on_press(Message::Request(
         WaylandRequest::Close(win.foreign_toplevel().clone()),
         false,
-      )),
+      ))
+      .apply(|it| button_tooltip(it, fl!("close"))),
   );
 
   cosmic::iced::widget::hover(button, overlay)
