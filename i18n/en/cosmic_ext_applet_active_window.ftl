@@ -1,5 +1,6 @@
 app-title = Active Window
 app-comment = View and manage the currently focused application
+app-keywords =
 
 minimize = Minimize
 maximize = Maximize
@@ -9,14 +10,12 @@ pin = Pin
 unpin = Unpin
 close = Close
 
-launch-new-window = New Window
+new-window = New Window
 close-all = Close All Windows
 
+config-icon-position = Icon position
 config-max-width = Max title width (px)
 config-template = Title template
 
-app-keywords =
-about = About
-view = View
-page-id = Page {$num}
-git-description = Git commit {$hash} on {$date}
+left = Left
+right = Right

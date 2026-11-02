@@ -119,7 +119,7 @@ impl ActiveApp {
     // this if a window already exists
     if !has_new_window && let Some(exec) = entry.exec() {
       actions.insert(0, DesktopLaunch {
-        name: fl!("launch-new-window"),
+        name: fl!("new-window"),
         app_id: appid.to_string(),
         exec: exec.to_string(),
         term: entry.terminal(),

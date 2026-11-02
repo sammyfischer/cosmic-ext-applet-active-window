@@ -18,6 +18,7 @@ indexmap = "2.14.2"
 memmap2 = "0.9.12"
 rust-embed = "8.11"
 rustix = "1.1.6"
+serde = { version = "1.0.229", features = ["derive"] }
 textwrap = "0.16.4"
 tokio = { version = "1.52.0", features = ["full"] }
 tracing = "0.1.44"

@@ -30,6 +30,7 @@ use cosmic::{
     image::Handle,
     layer_container,
     rectangle_tracker::{RectangleUpdate, rectangle_tracker_subscription},
+    segmented_button::{Entity, SingleSelectModel},
   },
 };
 
@@ -38,7 +39,7 @@ use crate::{
     slider_input::{SliderInput, SliderInputMessage},
     toggle_button::{TintFn, tinted_icon_class},
   },
-  config::Config,
+  config::{Config, IconPosition},
   fl,
   template::TitleTemplate,
   wayland::{ActiveApp, WaylandEvent, WaylandRequest, Window, wayland_subscription},
@@ -62,6 +63,11 @@ pub struct AppModel {
   /// Configuration data that persists between application runs
   config: Config,
   config_handle: Option<cosmic_config::Config>,
+
+  /// Behavior for left/right selection
+  icon_pos_model: SingleSelectModel,
+  /// Entities for the left and right seletion, respectively
+  icon_pos_entity: (Entity, Entity),
 
   max_width_slider: SliderInput,
 
@@ -146,6 +152,9 @@ pub enum Message {
   /// The config was written to
   UpdateConfig(Config),
 
+  /// The icon position was selected in the dropdown
+  UpdateIconPosition(Entity),
+
   /// The max-width value was changed in the ui
   UpdateMaxWidth(SliderInputMessage),
 
@@ -202,6 +211,15 @@ impl cosmic::Application for AppModel {
       })
       .unwrap_or_default();
 
+    // setup for the left/right segmented control for icon position
+    let mut icon_pos_model = SingleSelectModel::default();
+    let left_entity = icon_pos_model.insert().text(fl!("left")).id();
+    let right_entity = icon_pos_model.insert().text(fl!("right")).id();
+    icon_pos_model.activate(match config.icon_position {
+      IconPosition::Left => left_entity,
+      IconPosition::Right => right_entity,
+    });
+
     let template = config
       .template
       .as_deref()
@@ -216,6 +234,8 @@ impl cosmic::Application for AppModel {
       core,
       config,
       config_handle,
+      icon_pos_model,
+      icon_pos_entity: (left_entity, right_entity),
       template,
       template_buf,
       ..Default::default()
@@ -293,18 +313,21 @@ impl cosmic::Application for AppModel {
 
     let mut container = widget::Row::new();
 
-    // if self.config.icon_position == IconPosition::Left {
-    container = container.push(icon);
-    // }
+    if self.config.icon_position == IconPosition::Left {
+      container = container.push(icon);
 
-    if is_horizontal {
-      // only show text on horizontal panel layout
-      container = container.push(text);
+      if is_horizontal {
+        // only show text on horizontal panel layout
+        container = container.push(text);
+      }
     }
+    else if self.config.icon_position == IconPosition::Right {
+      if is_horizontal {
+        container = container.push(text);
+      }
 
-    // if self.config.icon_position == IconPosition::Right {
-    //   container = container.push(icon);
-    // }
+      container = container.push(icon);
+    }
 
     container = container
       .spacing(space_xxs) // spacing between elements
@@ -470,7 +493,14 @@ impl cosmic::Application for AppModel {
       }
 
       Message::UpdateConfig(config) => {
+        if config.icon_position != self.config.icon_position {
+          self
+            .icon_pos_model
+            .activate_position(config.icon_position.index());
+        }
+
         self.config = config;
+
         self.track_slider_input();
         self.template_buf = self.config.template.clone().unwrap_or_default();
 
@@ -481,12 +511,32 @@ impl cosmic::Application for AppModel {
         });
       }
 
+      Message::UpdateIconPosition(entity) => {
+        if let Some(handle) = &self.config_handle {
+          self.icon_pos_model.activate(entity);
+
+          let pos = if self.icon_pos_entity.1 == entity {
+            IconPosition::Right
+          }
+          else {
+            IconPosition::Left
+          };
+
+          if let Err(why) = self.config.set_icon_position(handle, pos) {
+            tracing::error!(?why, "failed to write icon_position: {why}");
+          }
+          else {
+            self.config.icon_position = pos;
+          }
+        }
+      }
+
       Message::UpdateMaxWidth(msg) => {
         if let Some(width) = self.max_width_slider.update(msg)
           && let Some(handle) = &self.config_handle
         {
           if let Err(why) = self.config.set_max_width(handle, width) {
-            tracing::error!(?why, "failed to write max width config to disk");
+            tracing::error!(?why, "failed to write max_width: {why}");
           }
           else {
             self.config.max_width = width;
@@ -741,6 +791,14 @@ impl AppModel {
     let ctx = &self.core.applet;
     let Spacing { space_xxs, .. } = cosmic::theme::spacing();
 
+    let set_icon_pos = Field {
+      label: fl!("config-icon-position"),
+
+      input: widget::segmented_control::horizontal(&self.icon_pos_model)
+        .on_activate(Message::UpdateIconPosition)
+        .into(),
+    };
+
     let set_max_width = Field {
       label: fl!("config-max-width"),
 
@@ -758,6 +816,9 @@ impl AppModel {
     };
 
     let content = column![
+      // icon position dropdown
+      row(ctx.text(set_icon_pos.label)),
+      row(set_icon_pos.input),
       // max width slider
       row(ctx.text(set_max_width.label)),
       row(set_max_width.input),
