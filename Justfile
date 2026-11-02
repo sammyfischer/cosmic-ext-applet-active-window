@@ -102,7 +102,6 @@ package: build
 tag version:
   find -type f -name Cargo.toml -exec sed -i '0,/^version/s/^version.*/version = "{{ version }}"/' '{}' \; -exec git add '{}' \;
   cargo check
-  cargo clean
   git add Cargo.lock
   git commit -m 'release: {{ version }}'
   git tag -a v{{ version }} -m 'release: {{ version }}'
