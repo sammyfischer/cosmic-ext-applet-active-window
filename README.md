@@ -2,12 +2,15 @@
 
 Shows which window is active and adds a control panel to conveniently manage the active application.
 
+![Control Panel](screenshots/control-panel.png)
+
 ## Features
 
 Applet
 
-- see the current active window in the panel or dock
+- see the current active window in the panel or dock (hover to see full text)
 - shows the app icon and window title
+  - adapts to vertical layout by hiding text
 - right click to change settings
   - customize the text with a template using the variables `{name}` `{title}` and `{count}` (use `{{` and `}}` to include literal braces in the template)
 
