@@ -1,10 +1,10 @@
 [package]
-name = "cosmic-applet-active-window"
+name = "cosmic-ext-applet-active-window"
 version = "0.1.0"
 edition = "2024"
 license = "MPL-2.0"
-repository = "https://github.com/sammyfischer/cosmic-applet-active-window"
-description = "Shows the active window text"
+repository = "https://github.com/sammyfischer/cosmic-ext-applet-active-window"
+description = "View and manage the currently focused application"
 
 [build-dependencies]
 xdgen = "0.1"

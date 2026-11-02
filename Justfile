@@ -1,8 +1,8 @@
-name := 'cosmic-applet-active-window'
+name := 'cosmic-ext-applet-active-window'
 appid := 'com.github.sammyfischer.ActiveWindowApplet'
 
 rootdir := ''
-prefix := '/usr'
+prefix := env('PREFIX', home_directory() / '.local')
 
 appdata := appid + '.metainfo.xml'
 desktop := appid + '.desktop'
@@ -13,7 +13,6 @@ cargo-target-dir := env('CARGO_TARGET_DIR', 'target')
 appdata-dst := base-dir / 'share' / 'appdata' / appdata
 bin-dst := base-dir / 'bin' / name
 desktop-dst := base-dir / 'share' / 'applications' / desktop
-# icon-dst := base-dir / 'share' / 'icons' / 'hicolor' / 'scalable' / 'apps' / appid + '.svg'
 icon-dst := base-dir / 'share' / 'icons' / 'hicolor' / '512x512' / 'apps' / appid + '.png'
 
 # Default recipe which runs `just build-release`
@@ -30,12 +29,9 @@ clean-vendor:
 # `cargo clean` and removes vendored dependencies
 clean-dist: clean clean-vendor
 
-# Compiles with debug profile
-build-debug *args:
-  cargo build {{ args }}
-
 # Compiles with release profile
-build *args: (build-debug '--release' args)
+build *args:
+  cargo build --release {{ args }}
 
 # Compiles release profile with vendored dependencies
 build-vendored *args: vendor-extract (build '--frozen --offline' args)
@@ -65,18 +61,22 @@ run *args:
 
 # Installs files
 install:
-  sudo install -Dm0755 {{ cargo-target-dir / 'release' / name }} {{ bin-dst }}
-  sudo install -Dm0644 {{ 'target' / 'xdgen' / 'app.desktop' }} {{ desktop-dst }}
-  sudo install -Dm0644 {{ 'target' / 'xdgen' / 'app.metainfo.xml' }} {{ appdata-dst }}
-  sudo install -Dm0644 resources/512x512.png {{ icon-dst }}
+  install -Dm0755 {{ cargo-target-dir / 'release' / name }} {{ bin-dst }}
+  install -Dm0644 {{ 'target' / 'xdgen' / 'app.desktop' }} {{ desktop-dst }}
+  install -Dm0644 {{ 'target' / 'xdgen' / 'app.metainfo.xml' }} {{ appdata-dst }}
+  install -Dm0644 resources/512x512.png {{ icon-dst }}
 
-alias bi := build-install
-# Builds in release mode and installs
-build-install: build install
+# Install for all users
+install-sys:
+  sudo "$(which just)" prefix=/usr install
 
 # Uninstalls installed files
 uninstall:
   rm {{ bin-dst }} {{ desktop-dst }} {{ icon-dst }}
+
+# Uninstalls a system-wide installation
+uninstall-sys:
+  sudo "$(which just)" prefix=/usr uninstall
 
 view-logs:
   journalctl -f SYSLOG_IDENTIFIER={{ name }}
@@ -93,6 +93,10 @@ vendor:
 vendor-extract:
   rm -rf vendor
   tar pxf vendor.tar
+
+# Builds a release package
+package: build
+  just rootdir=debian/{{ name }} prefix=/usr install
 
 # Bump cargo version, create git commit, and create tag
 tag version:

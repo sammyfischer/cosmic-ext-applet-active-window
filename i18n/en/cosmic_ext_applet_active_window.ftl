@@ -1,5 +1,5 @@
 app-title = Active Window
-app-comment = Shows the active window text
+app-comment = View and manage the currently focused application
 
 minimize = Minimize
 maximize = Maximize

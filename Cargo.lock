@@ -1021,28 +1021,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cosmic-applet-active-window"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures",
- "i18n-embed",
- "i18n-embed-fl",
- "image",
- "indexmap 2.14.2",
- "libcosmic",
- "memmap2 0.9.12",
- "rust-embed",
- "rustix 1.1.6",
- "textwrap",
- "tokio",
- "tracing",
- "tracing-journald",
- "tracing-subscriber",
- "xdgen",
-]
-
-[[package]]
 name = "cosmic-client-toolkit"
 version = "0.2.0"
 source = "git+https://github.com/pop-os/cosmic-protocols?rev=c0cff4d#c0cff4db14c37ed954983158e4055aa94c7741d9"
@@ -1083,6 +1061,28 @@ source = "git+https://github.com/pop-os/libcosmic.git#dbc62f2d899cdbfbe43d170689
 dependencies = [
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "cosmic-ext-applet-active-window"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "i18n-embed",
+ "i18n-embed-fl",
+ "image",
+ "indexmap 2.14.2",
+ "libcosmic",
+ "memmap2 0.9.12",
+ "rust-embed",
+ "rustix 1.1.6",
+ "textwrap",
+ "tokio",
+ "tracing",
+ "tracing-journald",
+ "tracing-subscriber",
+ "xdgen",
 ]
 
 [[package]]

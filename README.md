@@ -21,13 +21,21 @@ Control panel
 
 ## Installation
 
-Use the [justfile](./Justfile) to build and install. Use `just build-install` to build with the release profile and install system-wide.
+```bash
+# Switch to desired version
+git switch -d v1.0.0 # browse repo tags to find versions
 
-- `just` builds the application with the default `just build-release` recipe
-- `just install` installs the project into the system
-- `just vendor` creates a vendored tarball
-- `just build-vendored` compiles with vendored dependencies from that tarball
-- `just uninstall` uninstalls by simply deleting the installed files. It does not remove config data.
+# Build:
+just
+
+# Install/uninstall for the current user:
+just install
+just uninstall
+
+# Install/uninstall for all users:
+just install-sys
+just uninstall-sys
+```
 
 ## Translators
 
@@ -40,7 +48,7 @@ If packaging for a Linux distribution, vendor dependencies locally with the `ven
 ```sh
 just vendor
 just build-vendored
-just rootdir=debian/cosmic-applet-active-window prefix=/usr install
+just rootdir=debian/cosmic-ext-applet-active-window prefix=/usr install
 ```
 
 It is recommended to build a source tarball with the vendored dependencies, which can typically be done by running `just vendor` on the host system before it enters the build environment.
