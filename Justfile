@@ -15,7 +15,7 @@ bin-dst := base-dir / 'bin' / name
 desktop-dst := base-dir / 'share' / 'applications' / desktop
 icon-dst := base-dir / 'share' / 'icons' / 'hicolor' / '512x512' / 'apps' / appid + '.png'
 
-# Default recipe which runs `just build-release`
+# Default recipe which runs `just build`
 default: build
 
 # Runs `cargo clean`

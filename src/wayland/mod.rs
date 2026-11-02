@@ -287,12 +287,16 @@ pub fn wayland_handler(
   });
 
   let connection = if let Some(socket) = socket {
-    Connection::from_socket(socket)
+    let conn =
+      Connection::from_socket(socket).context("failed to connect to wayland privileged socket")?;
+    tracing::info!("connected to wayland privileged socket");
+    conn
   }
   else {
-    Connection::connect_to_env()
-  }
-  .context("failed to initialize wayland connection")?;
+    let conn = Connection::connect_to_env().context("failed to connect to wayland socket")?;
+    tracing::info!("connected to wayland socket");
+    conn
+  };
 
   let (global_list, event_queue) =
     registry_queue_init(&connection).context("failed to initialize registry queue")?;
@@ -326,7 +330,7 @@ pub fn wayland_handler(
   let toplevel_mgr_state = ToplevelManagerState::new(&registry_state, &queue_handle);
   let seat_state = SeatState::new(&global_list, &queue_handle);
   let screencopy_state = ScreencopyState::new(&global_list, &queue_handle);
-  let shm_state = Shm::bind(&global_list, &queue_handle)?;
+  let shm_state = Shm::bind(&global_list, &queue_handle).context("failed to bind shared memory")?;
 
   let mut state = WaylandState {
     last_sent: None,
@@ -398,14 +402,14 @@ async fn start_listening(
           // spawn thread once
           std::thread::spawn(move || {
             if let Err(why) = wayland_handler(event_tx, request_rx) {
-              tracing::error!(?why, "wayland handler errored");
+              tracing::error!(?why, "wayland handler errored: {why}");
             }
           });
 
           *guard = Some(event_rx);
 
           if let Err(why) = output.send(WaylandEvent::Init(request_tx)).await {
-            tracing::error!(?why, "failed to send init event");
+            tracing::error!(?why, "failed to send init event: {why}");
           }
         }
 

@@ -30,7 +30,10 @@ fn init_logs() {
 
   let filter = EnvFilter::builder()
     .with_default_directive(LevelFilter::INFO.into())
-    .from_env_lossy();
+    .from_env_lossy()
+    // cosmic::applet spams the message "40". this filters out all info messages from
+    // cosmic::applet, which may remove some useful messages but shouldn't be a huge deal
+    .add_directive("cosmic::applet=warn".parse().unwrap());
 
   // try journald
   let journald = tracing_journald::layer()
